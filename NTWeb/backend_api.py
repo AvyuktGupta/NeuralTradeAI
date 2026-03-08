@@ -33,6 +33,9 @@ from NTMods.Modules.sentiment_module.run import run_sentiment_module
 
 app = Flask(__name__)
 
+# Modules are considered loaded when this process is running (imports succeeded at startup)
+MODULES_LOADED = True
+
 # --- Resolve company name or ticker to yfinance symbol ---
 _CRYPTO_MAP = {"BTC": "BTC-USD", "BITCOIN": "BTC-USD", "ETH": "ETH-USD", "ETHEREUM": "ETH-USD"}
 
@@ -56,22 +59,6 @@ def _yahoo_search_ticker(query):
             if ".BO" in sym:
                 return sym
         if quotes:
-            return (quotes[0].get("symbol") or "").strip() or None
-        return None
-    except Exception:
-        return None
-        if r.status_code != 200:
-            return None
-        data = r.json()
-        quotes = data.get("quotes") or []
-        for q in quotes:
-            sym = (q.get("symbol") or "").strip()
-            if not sym or sym in ("SPY", "QQQ"):
-                continue
-            if ".NS" in sym or str(q.get("exchange") or "").upper() in ("NSI", "NSE"):
-                return sym
-            if ".BO" in sym:
-                return sym
             return (quotes[0].get("symbol") or "").strip() or None
         return None
     except Exception:
@@ -207,6 +194,12 @@ def _make_serializable(obj):
     return obj
 
 # --- API routes ---
+@app.route("/status", methods=["GET"])
+def api_status():
+    """Report whether analysis modules (NTMods) are ready. Used by frontend to show loading until ready."""
+    return jsonify({"modules_loaded": MODULES_LOADED})
+
+
 @app.route("/market", methods=["GET"])
 def api_market():
     return jsonify(get_market_data())

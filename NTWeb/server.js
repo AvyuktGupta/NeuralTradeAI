@@ -1,7 +1,6 @@
 /**
  * NeuralTrade Web - Node.js server.
- * Serves the UI and proxies data from the Python backend (backend_api.py).
- * Python modules (data_collector, signal_engine, insight_engine, NeuralTrade) stay unchanged.
+ * Serves React static build and proxies /api/* to the Python backend (backend_api.py).
  */
 
 const express = require('express');
@@ -9,100 +8,44 @@ const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const BACKEND_URL = process.env.BACKEND_URL || 'http://127.0.0.1:5001';
+const BACKEND_URL = (process.env.BACKEND_URL || 'http://127.0.0.1:5001').replace(/\/$/, '');
 
-app.set('view engine', 'ejs');
-app.set('views', path.join(__dirname, 'views'));
-
-app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
-async function fetchBackend(pathname, options = {}) {
-  const url = `${BACKEND_URL.replace(/\/$/, '')}${pathname}`;
-  const res = await fetch(url, options);
-  if (!res.ok) {
-    const err = new Error(`Backend ${res.status}: ${url}`);
-    err.status = res.status;
-    throw err;
-  }
-  return res.json();
-}
-
-/** GET / - Home: sidebar data only */
-app.get('/', async (req, res, next) => {
+/** Proxy /api/* to Python backend (e.g. /api/status -> /status, /api/market -> /market) */
+app.use('/api', async (req, res, next) => {
+  const backendPath = req.url || '/';
+  const url = `${BACKEND_URL}${backendPath}`;
   try {
-    const [market, movers, news] = await Promise.all([
-      fetchBackend('/market'),
-      fetchBackend('/movers'),
-      fetchBackend('/news')
-    ]);
-    res.render('index', {
-      market,
-      movers,
-      news,
-      wire_label: null,
-      company: '',
-      error: null,
-      sentiment: {},
-      volume: {},
-      spike: 1.0,
-      insight: '',
-      technical: null,
-      fundamentals: null,
-      sentiment_module: null,
-      resolved_ticker: null,
-      stock_chart: null
-    });
-  } catch (err) {
-    next(err);
-  }
-});
-
-/** POST / - Scan company: full page data from Python backend */
-app.post('/', async (req, res, next) => {
-  try {
-    const company = (req.body.company || '').trim();
-    const data = await fetchBackend('/scan', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ company })
-    });
-    res.render('index', {
-      market: data.market,
-      movers: data.movers,
-      news: data.news,
-      wire_label: data.wire_label,
-      company: data.company,
-      error: data.error,
-      sentiment: data.sentiment || {},
-      volume: data.volume || {},
-      spike: data.spike != null ? data.spike : 1.0,
-      insight: data.insight || '',
-      technical: data.technical,
-      fundamentals: data.fundamentals,
-      sentiment_module: data.sentiment_module,
-      resolved_ticker: data.resolved_ticker,
-      stock_chart: data.stock_chart
-    });
-  } catch (err) {
-    next(err);
-  }
-});
-
-/** GET /api/chart - Proxy to Python backend */
-app.get('/api/chart', async (req, res, next) => {
-  try {
-    const ticker = (req.query.ticker || '').trim();
-    const period = (req.query.period || '3mo').trim().toLowerCase();
-    const url = `${BACKEND_URL}/chart?ticker=${encodeURIComponent(ticker)}&period=${encodeURIComponent(period)}`;
-    const response = await fetch(url);
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      return res.status(response.status).json(data);
+    const headers = { ...req.headers, host: undefined };
+    const options = { method: req.method, headers };
+    if (req.method !== 'GET' && req.method !== 'HEAD' && req.body !== undefined) {
+      options.body = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
     }
-    res.json(data);
+    const response = await fetch(url, options);
+    const contentType = response.headers.get('content-type');
+    const data = contentType && contentType.includes('json') ? await response.json().catch(() => ({})) : await response.text();
+    res.status(response.status);
+    if (contentType) res.setHeader('Content-Type', contentType);
+    res.send(data);
   } catch (err) {
     next(err);
+  }
+});
+
+/** Serve React build when present */
+const distDir = path.join(__dirname, 'dist');
+app.use(express.static(distDir));
+
+/** SPA fallback: serve index.html for non-API routes */
+app.get('*', (req, res, next) => {
+  if (req.path.startsWith('/api')) return next();
+  const indexFile = path.join(distDir, 'index.html');
+  const fs = require('fs');
+  if (fs.existsSync(indexFile)) {
+    res.sendFile(indexFile);
+  } else {
+    res.status(500).send('Build not found. Run: npm run build');
   }
 });
 

@@ -1,42 +1,47 @@
-# NeuralTrade Web (Node.js)
+# NeuralTrade
 
-The website is served by **Node.js** (Express) and uses the same **Python modules** for all logic (data_collector, signal_engine, insight_engine, NeuralTrade modules). No changes to those Python modules are required.
+**NTWeb** (React + Node.js) is the frontend; **NTMods** (Python) is the backend. The website talks to the Python API over HTTP.
 
-## Run the Node.js site
+## Run the project
 
 1. **Start the Python backend API** (must run first):
    ```bash
-   cd NeuralTradeWeb
+   cd NTWeb
    python backend_api.py
    ```
    This starts the JSON API on **http://127.0.0.1:5001**.
 
-2. **Install Node dependencies and start the web server**:
-   ```bash
-   npm install
-   npm start
-   ```
-   The site is at **http://localhost:3000**.
+2. **Frontend (choose one):**
+   - **Production:** Build and serve via Node:
+     ```bash
+     cd NTWeb
+     npm install
+     npm run build
+     npm start
+     ```
+     Open **http://localhost:3000**. The app will show a loading screen until the backend reports `modules_loaded: true`, then the dashboard appears.
+   - **Development:** Run Vite dev server (with proxy to backend):
+     ```bash
+     cd NTWeb
+     npm run dev
+     ```
+     Open **http://localhost:3000** (Vite proxies `/api/*` to the Python backend).
 
 ## Ports and env
 
 - **Node (website):** `PORT` (default `3000`)
-- **Python backend:** `BACKEND_URL` (default `http://127.0.0.1:5001`). Set this if you run the Python API on another host/port.
+- **Python backend:** `BACKEND_URL` (default `http://127.0.0.1:5001`). Set in NTWeb if the Python API runs on another host/port.
 
-## Files
+## Architecture
 
-| File              | Role                                              |
-|-------------------|---------------------------------------------------|
-| `server.js`       | Express app: serves pages, proxies `/api/chart`,  |
-|                   | calls Python backend for data                     |
-| `views/index.ejs` | Same UI as original Flask template (EJS instead   |
-|                   | of Jinja2)                                        |
-| `backend_api.py`  | Flask JSON API used by Node; reuses all Python    |
-|                   | modules                                           |
-| `app.py`          | Original Flask app (optional; you can keep using  |
-|                   | it or use Node + backend_api)                     |
+| Layer    | Location | Role |
+|----------|----------|------|
+| Frontend | **NTWeb** (React) | `src/` – components, pages, services; communicates with backend via `/api/*` |
+| Server   | **NTWeb**        | `server.js` – serves React build, proxies `/api/*` to Python |
+| Backend  | **NTWeb**        | `backend_api.py` – Flask JSON API; exposes `/status`, `/market`, `/movers`, `/news`, `/chart`, `/scan` |
+| Modules  | **NTMods**       | Python analysis (indicator, trust, sentiment); used by `backend_api.py` |
 
-Python modules (`data_collector.py`, `signal_engine.py`, `insight_engine.py`, NeuralTrade modules) are **unchanged** and only used by `backend_api.py`.
+NTWeb also contains `data_collector.py`, `signal_engine.py`, `insight_engine.py` used by `backend_api.py` for news, signals, and AI insight.
 
 ## Sentiment Module (High‑Level Overview)
 
@@ -135,14 +140,11 @@ The module returns a single dict (or `None` on failure):
 
 | Field         | Type    | Description                                 |
 |---------------|---------|---------------------------------------------|
-| `module`      | `str`   | `"Fundamental Analyzer"`                    |
-| `ticker`      | `str`   | The ticker that was analysed                |
-| `trust_score` | `float` | 0–100, rounded to 1 decimal                 |
-| `verdict`     | `str`   | One of: Legit / Financially Strong,         |
-|               |         | Caution / Mixed Signals, Suspicious / Risky |
-| `metrics`     | `dict`  | Raw metrics: EPS Growth %, Revenue Growth %,|
-|               |         | ROE %, Debt/Equity, Margin %, FCF Trend %,  |
-|               |         | Current Ratio                               |
+| `module`      | `str`   | `"Fundamental Analyzer"` |
+| `ticker`      | `str`   | The ticker that was analysed|
+| `trust_score` | `float` | 0–100, rounded to 1 decimal |
+| `verdict`     | `str`   | One of: Legit / Financially Strong, Caution / Mixed Signals, Suspicious / Risky |
+| `metrics`     | `dict`  | Raw metrics: EPS Growth %, Revenue Growth %, ROE %, Debt/Equity, Margin %, FCF Trend %, Current Ratio |
 
 ### End-to-end flow (summary)
 
