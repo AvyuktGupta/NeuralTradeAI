@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NeuralTrade | Financial Terminal</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { background: radial-gradient(circle at top left, hsl(294, 98%, 17%), #031e5f); color: #e2e8f0; font-family: 'Segoe UI', sans-serif; min-height: 100vh; }
+        .glass-panel { background: rgba(15, 23, 42, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.08); }
+        .text-gold { color: #fbbf24; }
+        .border-gold { border-color: #fbbf24; }
+        .scrollbar-hide::-webkit-scrollbar { display: none; }
+        .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+    </style>
+</head>
+<body class="flex flex-col h-screen overflow-hidden">
+
+    <nav class="glass-panel z-50 h-16 shrink-0">
+        <div class="container mx-auto px-6 h-full flex justify-between items-center">
+            <div class="flex items-center gap-3">
+                <div class="w-8 h-8 bg-blue-600 rounded flex items-center justify-center text-white font-bold">N</div>
+                <h1 class="text-xl font-bold text-white">Neural<span class="text-gold">Trade</span></h1>
+            </div>
+            <div class="flex items-center gap-3">
+                <!-- User area left empty -->
+            </div>
+        </div>
+    </nav>
+
+    <div class="flex flex-grow overflow-hidden p-6 gap-6 container mx-auto max-w-7xl">
+        
+        <div class="w-3/4 flex flex-col gap-6 overflow-y-auto scrollbar-hide pr-2">
+            
+            <div class="glass-panel p-6 rounded-xl">
+                <form method="POST" class="flex gap-4">
+                    <input type="text" name="company" placeholder="Search Ticker (e.g. RELIANCE, BTC)..." required 
+                           class="flex-grow bg-slate-900/50 text-white p-3 border border-slate-600 rounded-lg focus:border-gold outline-none transition-all">
+                    <button type="submit" class="bg-blue-600 hover:bg-blue-500 text-white font-bold px-8 rounded-lg transition">SCAN</button>
+                </form>
+                <% if (error) { %><p class="text-red-400 text-xs mt-3">⚠️ <%= error %></p><% } %>
+            </div>
+
+            <% if (company) { %>
+            <% if (resolved_ticker) { %>
+            <p class="text-slate-400 text-xs">Resolved ticker: <span class="text-gold font-mono"><%= resolved_ticker %></span> (used for Technical &amp; Fundamentals)</p>
+            <% } %>
+            <% if (stock_chart) { %>
+            <div class="glass-panel p-6 rounded-xl border-l-4 border-cyan-500">
+                <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
+                    <h3 class="text-cyan-400 text-xs font-bold uppercase">📈 <%= company %> — Price Chart</h3>
+                    <div class="flex gap-1" role="group" aria-label="Chart timeline">
+                        <button type="button" data-period="1d" class="chart-period-btn px-3 py-1.5 rounded text-xs font-bold bg-slate-700 text-slate-300 border border-slate-600 hover:bg-slate-600">1D</button>
+                        <button type="button" data-period="1mo" class="chart-period-btn px-3 py-1.5 rounded text-xs font-bold bg-slate-700 text-slate-300 border border-slate-600 hover:bg-slate-600">1M</button>
+                        <button type="button" data-period="3mo" class="chart-period-btn px-3 py-1.5 rounded text-xs font-bold bg-cyan-600 text-white border border-cyan-500">3M</button>
+                        <button type="button" data-period="1y" class="chart-period-btn px-3 py-1.5 rounded text-xs font-bold bg-slate-700 text-slate-300 border border-slate-600 hover:bg-slate-600">1Y</button>
+                    </div>
+                </div>
+                <div class="h-56"><canvas id="stockPriceChart"></canvas></div>
+                <p class="text-slate-400 text-xs mt-2"><span id="chartPeriodLabel">Last 3 months</span> (close price)</p>
+            </div>
+            <% } %>
+            <div class="glass-panel p-6 rounded-xl border-l-4 border-gold">
+                <h3 class="text-gold text-xs font-bold uppercase mb-2">⚡ AI Insight</h3>
+                <p class="text-lg text-white font-light leading-relaxed">"<%= insight %>"</p>
+            </div>
+
+            <% if (technical) { %>
+            <div class="glass-panel p-6 rounded-xl border-l-4 border-blue-500">
+                <h3 class="text-blue-400 text-xs font-bold uppercase mb-2">Technical Analysis (NeuralTrade)</h3>
+                <div class="flex flex-wrap items-center gap-4">
+                    <div class="flex items-center gap-2">
+                        <span class="text-slate-400 text-sm">Signal</span>
+                        <span class="font-bold text-lg <%= technical.signal === 'BUY' ? 'text-emerald-400' : technical.signal === 'SELL' ? 'text-red-400' : 'text-amber-400' %>"><%= technical.signal === 'BUY' ? 'UP' : technical.signal === 'SELL' ? 'DOWN' : technical.signal %></span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <span class="text-slate-400 text-sm">Confidence</span>
+                        <span class="font-bold text-white"><%= technical.confidence %>%</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <span class="text-slate-400 text-sm">Timeframe</span>
+                        <span class="text-white"><%= technical.timeframe_minutes %>m</span>
+                    </div>
+                </div>
+                <% if (technical.details) { %>
+                <p class="text-slate-400 text-xs mt-3">Based on RSI, MACD, StochRSI &amp; Bollinger Bands.</p>
+                <% } %>
+            </div>
+            <% } %>
+
+            <% if (fundamentals) { %>
+            <div class="glass-panel p-6 rounded-xl border-l-4 border-emerald-500">
+                <h3 class="text-emerald-400 text-xs font-bold uppercase mb-2">Fundamentals</h3>
+                <div class="flex flex-wrap items-center gap-4 mb-3">
+                    <div class="flex items-center gap-2">
+                        <span class="text-slate-400 text-sm">Trust Score</span>
+                        <span class="font-bold text-lg text-white"><%= fundamentals.trust_score %>/100</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <span class="text-slate-400 text-sm">Verdict</span>
+                        <span class="font-bold <%= (fundamentals.verdict && (fundamentals.verdict.includes('Strong') || fundamentals.verdict.includes('Legit'))) ? 'text-emerald-400' : (fundamentals.verdict && (fundamentals.verdict.includes('Risky') || fundamentals.verdict.includes('Suspicious'))) ? 'text-red-400' : 'text-amber-400' %>"><%= fundamentals.verdict %></span>
+                    </div>
+                </div>
+                <% if (fundamentals.metrics && Object.keys(fundamentals.metrics).length) { %>
+                <div class="grid grid-cols-2 sm:grid-cols-3 gap-2 text-sm">
+                    <% Object.entries(fundamentals.metrics).forEach(function([label, value]) { %>
+                    <div class="flex justify-between bg-slate-800/40 rounded px-3 py-2">
+                        <span class="text-slate-400"><%= label %></span>
+                        <span class="text-white font-mono"><%= value != null ? (typeof value === 'number' ? value.toFixed(2) : String(value)) + (label.indexOf('%') >= 0 && typeof value === 'number' ? '%' : '') : '—' %></span>
+                    </div>
+                    <% }); %>
+                </div>
+                <% } %>
+            </div>
+            <% } %>
+
+            <% if (sentiment_module) { %>
+            <div class="glass-panel p-6 rounded-xl border-l-4 border-amber-500">
+                <h3 class="text-amber-400 text-xs font-bold uppercase mb-2">Sentiment Analysis (NeuralTrade)</h3>
+                <div class="flex flex-wrap items-center gap-4">
+                    <div class="flex items-center gap-2">
+                        <span class="text-slate-400 text-sm">Verdict</span>
+                        <span class="font-bold text-lg <%= sentiment_module.verdict === 'Positive' ? 'text-emerald-400' : sentiment_module.verdict === 'Negative' ? 'text-red-400' : 'text-amber-400' %>"><%= sentiment_module.verdict %></span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <span class="text-slate-400 text-sm">Score</span>
+                        <span class="font-bold text-white"><%= sentiment_module.score %>/100</span>
+                    </div>
+                </div>
+                <p class="text-slate-400 text-xs mt-3">News-based sentiment (VADER + financial lexicon). Trend chart below uses same logic.</p>
+            </div>
+            <% } %>
+
+            <h3 class="text-white font-bold text-sm mt-2 border-l-4 border-amber-500 pl-3">Sentiment trend from news (NeuralTrade Sentiment Module)</h3>
+            <div class="grid grid-cols-2 gap-6">
+                <div class="glass-panel p-4 rounded-xl">
+                    <h3 class="text-slate-400 text-xs uppercase font-bold mb-2">Sentiment Trend</h3>
+                    <div class="h-40"><canvas id="sentimentChart"></canvas></div>
+                </div>
+                <div class="glass-panel p-4 rounded-xl">
+                    <h3 class="text-slate-400 text-xs uppercase font-bold mb-2">Volume Pressure</h3>
+                    <div class="h-40"><canvas id="volumeChart"></canvas></div>
+                </div>
+            </div>
+
+            <div class="glass-panel p-4 rounded-xl text-center flex justify-between items-center px-12">
+                <span class="text-slate-400 text-sm uppercase font-bold">Market Velocity</span>
+                <span class="text-4xl font-bold <%= spike > 1.5 ? 'text-red-400' : 'text-emerald-400' %>"><%= spike %>x</span>
+            </div>
+
+            <% } else { %>
+            <div class="glass-panel p-12 rounded-xl text-center opacity-50 flex flex-col items-center justify-center h-64">
+                <div class="text-6xl mb-4">📡</div>
+                <h2 class="text-xl font-bold text-white">System Ready</h2>
+                <p class="text-slate-400">Enter a symbol above to activate the signal engine.</p>
+            </div>
+            <% } %>
+
+            <h3 class="text-white font-bold text-lg mt-2 border-l-4 border-blue-500 pl-3">Live Market Wire</h3>
+            <p class="text-slate-400 text-sm mt-1 mb-2"><% if (wire_label) { %>6 latest news for <span class="text-gold"><%= wire_label %></span><% } else { %>Latest market news (default)<% } %></p>
+            <div class="grid grid-cols-2 gap-4 pb-8">
+                <% (news || []).forEach(function(article) { %>
+                <a href="<%= article.url || '#' %>" target="_blank" rel="noopener noreferrer" class="glass-panel p-4 rounded-lg hover:bg-slate-800/50 transition cursor-pointer block <%= !article.url ? 'pointer-events-none' : '' %>">
+                    <div class="flex justify-between text-[10px] text-gold mb-2">
+                        <span><%= article.source %></span><span><%= article.timestamp %></span>
+                    </div>
+                    <p class="text-sm text-slate-200 font-medium leading-snug"><%= article.text %></p>
+                </a>
+                <% }); %>
+            </div>
+        </div>
+
+        <div class="w-1/4 flex flex-col gap-6 h-full">
+            
+            <div class="glass-panel p-5 rounded-xl flex-grow flex flex-col min-h-0">
+                <h3 class="text-sm font-bold text-gold uppercase tracking-widest mb-4 border-b border-white/10 pb-2 shrink-0">⚡ Top Movers</h3>
+                <div class="space-y-3 overflow-y-auto scrollbar-hide flex-1 min-h-0 pr-1">
+                    <% (movers || []).forEach(function(stock) { %>
+                    <div class="flex justify-between items-center p-2 rounded bg-slate-800/40 border border-transparent hover:border-white/10">
+                        <div class="font-bold text-sm text-white"><%= stock.symbol %></div>
+                        <div class="text-right">
+                            <div class="font-mono text-xs text-slate-300"><%= stock.price %></div>
+                            <div class="text-[10px] font-bold <%= stock.color %>"><%= stock.pct_str %></div>
+                        </div>
+                    </div>
+                    <% }); %>
+                </div>
+            </div>
+
+            <div class="glass-panel p-4 rounded-xl h-1/2 overflow-y-auto scrollbar-hide">
+                <h3 class="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 text-center border-b border-white/10 pb-2">Indices</h3>
+                <div class="flex flex-col gap-2">
+                    <% (market || []).forEach(function(item) { %>
+                    <div class="flex justify-between items-center bg-slate-900/30 p-2 rounded hover:bg-white/5 transition">
+                        <span class="text-xs font-bold text-slate-300"><%= item.name %></span>
+                        <div class="text-right">
+                            <div class="text-xs font-bold text-white"><%= item.price %></div>
+                            <div class="text-[9px] <%= item.color %>"><%= item.change %></div>
+                        </div>
+                    </div>
+                    <% }); %>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <% if (company) { %>
+    <script>
+        // 0. STOCK PRICE CHART (searched symbol)
+        <% if (stock_chart) { %>
+        (function() {
+            const stockLabels = <%- JSON.stringify(stock_chart.labels) %>;
+            const stockPrices = <%- JSON.stringify(stock_chart.prices) %>;
+            const chartTicker = <%- JSON.stringify(resolved_ticker) %>;
+            const periodLabels = { '1d': '1 Day', '1mo': '1 Month', '3mo': '3 Months', '1y': '1 Year' };
+            const el = document.getElementById('stockPriceChart');
+            let stockChartInstance = null;
+            if (el && stockLabels && stockPrices && stockLabels.length) {
+                stockChartInstance = new Chart(el, {
+                    type: 'line',
+                    data: {
+                        labels: stockLabels,
+                        datasets: [{
+                            label: 'Close',
+                            data: stockPrices,
+                            borderColor: '#22d3ee',
+                            backgroundColor: function(context) {
+                                const ctx = context.chart.ctx;
+                                const g = ctx.createLinearGradient(0, 0, 0, 250);
+                                g.addColorStop(0, 'rgba(34, 211, 238, 0.25)');
+                                g.addColorStop(1, 'rgba(34, 211, 238, 0)');
+                                return g;
+                            },
+                            fill: true,
+                            tension: 0.3,
+                            pointRadius: 0,
+                            pointHoverRadius: 4
+                        }]
+                    },
+                    options: {
+                        maintainAspectRatio: false,
+                        plugins: { legend: { display: false } },
+                        scales: {
+                            x: {
+                                display: true,
+                                ticks: { color: '#94a3b8', maxTicksLimit: 8 },
+                                grid: { color: 'rgba(255,255,255,0.06)' }
+                            },
+                            y: {
+                                display: true,
+                                ticks: { color: '#94a3b8' },
+                                grid: { color: 'rgba(255,255,255,0.06)' }
+                            }
+                        }
+                    }
+                });
+                document.querySelectorAll('.chart-period-btn').forEach(function(btn) {
+                    btn.addEventListener('click', function() {
+                        const period = this.getAttribute('data-period');
+                        document.querySelectorAll('.chart-period-btn').forEach(function(b) {
+                            b.classList.remove('bg-cyan-600', 'text-white', 'border-cyan-500');
+                            b.classList.add('bg-slate-700', 'text-slate-300', 'border-slate-600');
+                        });
+                        this.classList.remove('bg-slate-700', 'text-slate-300', 'border-slate-600');
+                        this.classList.add('bg-cyan-600', 'text-white', 'border-cyan-500');
+                        const labelEl = document.getElementById('chartPeriodLabel');
+                        if (labelEl) labelEl.textContent = 'Last ' + (periodLabels[period] || period);
+                        fetch('/api/chart?ticker=' + encodeURIComponent(chartTicker) + '&period=' + encodeURIComponent(period))
+                            .then(function(r) { return r.ok ? r.json() : Promise.reject(); })
+                            .then(function(data) {
+                                if (stockChartInstance && data.labels && data.prices) {
+                                    stockChartInstance.data.labels = data.labels;
+                                    stockChartInstance.data.datasets[0].data = data.prices;
+                                    stockChartInstance.update();
+                                }
+                            })
+                            .catch(function() {
+                                if (labelEl) labelEl.textContent = 'Failed to load ' + (periodLabels[period] || period);
+                            });
+                    });
+                });
+            }
+        })();
+        <% } %>
+        // 1. SAFELY PARSE DATA
+        const sentimentRaw = <%- JSON.stringify(sentiment || {}) %>;
+        const volumeRaw = <%- JSON.stringify(volume || {}) %>;
+
+        // 2. EXTRACT KEYS & VALUES
+        const labels = Object.keys(sentimentRaw);
+        const sentimentValues = Object.values(sentimentRaw);
+        const volumeValues = Object.values(volumeRaw);
+
+        // 3. CHART CONFIG
+        const commonOptions = {
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: {
+                x: { display: false },
+                y: { display: false, grid: { display: false } }
+            },
+            interaction: {
+                intersect: false,
+                mode: 'index',
+            },
+        };
+
+        // 4. RENDER SENTIMENT
+        new Chart(document.getElementById('sentimentChart'), {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'Sentiment Score',
+                    data: sentimentValues,
+                    borderColor: '#fbbf24',
+                    backgroundColor: (context) => {
+                        const ctx = context.chart.ctx;
+                        const gradient = ctx.createLinearGradient(0, 0, 0, 200);
+                        gradient.addColorStop(0, 'rgba(251, 191, 36, 0.4)');
+                        gradient.addColorStop(1, 'rgba(251, 191, 36, 0)');
+                        return gradient;
+                    },
+                    fill: true,
+                    tension: 0.4,
+                    pointRadius: 0,
+                    pointHoverRadius: 5
+                }]
+            },
+            options: commonOptions
+        });
+
+        // 5. RENDER VOLUME
+        new Chart(document.getElementById('volumeChart'), {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'Msg Volume',
+                    data: volumeValues,
+                    backgroundColor: '#3b82f6',
+                    borderRadius: 2,
+                    hoverBackgroundColor: '#60a5fa'
+                }]
+            },
+            options: commonOptions
+        });
+    </script>
+    <% } %>
+</body>
+</html>

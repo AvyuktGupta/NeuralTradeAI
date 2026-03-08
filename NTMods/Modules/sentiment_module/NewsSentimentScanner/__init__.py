@@ -1,0 +1,1 @@
+# NewsSentimentScanner package
