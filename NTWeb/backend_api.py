@@ -69,29 +69,19 @@ def resolve_company_to_ticker(company):
         return None
     s = str(company).strip()
     s_upper = s.upper()
-    words = [w for w in s.split() if re.match(r"^[A-Za-z0-9]+$", w)]
     if s_upper in _CRYPTO_MAP:
         return _CRYPTO_MAP[s_upper]
+    # Already fully-qualified (e.g. RELIANCE.NS, BTC-USD) — use as-is
     if "." in s or ("-" in s and re.match(r"^[A-Z0-9]+-[A-Z]+$", s_upper)):
         return s_upper if s == s_upper else s
-    ticker_like = len(s) <= 10 and " " not in s and re.match(r"^[A-Za-z0-9\.\-]+$", s)
-    if ticker_like:
-        return s_upper + ".NS"
+    # Always ask Yahoo to resolve the correct symbol first
     found = _yahoo_search_ticker(s)
-    if not found and len(words) >= 2:
-        found = _yahoo_search_ticker(" ".join(words[:2]))
     if found:
-        if "." not in found and "-" not in found and len(found) <= 10:
-            return found + ".NS"
         return found
-    if len(words) >= 2:
-        two_word_ticker = "".join(w.upper() for w in words[:2]) + ".NS"
-        if len(two_word_ticker) <= 14:
-            return two_word_ticker
-    first_word = words[0] if words else s.split()[0] if s.split() else s
-    if first_word and re.match(r"^[A-Za-z0-9]+$", first_word) and len(first_word) <= 10:
-        return first_word.upper() + ".NS"
-    return (s_upper.replace(" ", "") + ".NS") if s_upper else None
+    # Yahoo couldn't find it — return raw input as fallback
+    if re.match(r"^[A-Za-z0-9\.\-/=^]+$", s) and len(s) <= 20:
+        return s_upper
+    return None
 
 def get_market_data():
     tickers = {"NIFTY 50": "^NSEI", "SENSEX": "^BSESN", "GOLD": "GC=F", "USD/INR": "INR=X", "BITCOIN": "BTC-USD"}
@@ -136,7 +126,8 @@ def get_stock_chart_data(ticker, period="3mo"):
                 dates.append(d.strftime(label_fmt) if hasattr(d, 'strftime') else str(d))
             except Exception:
                 dates.append(str(d))
-        prices = [float(round(c, 2)) for c in hist["Close"]]
+        import math
+        prices = [float(round(c, 2)) if not math.isnan(c) else None for c in hist["Close"]]
         return {"labels": dates, "prices": prices}
     except Exception:
         return None
@@ -177,19 +168,23 @@ def get_safe_news():
     return news
 
 def _make_serializable(obj):
-    """Convert numpy/pandas types to native Python for JSON."""
+    """Convert numpy/pandas types to native Python for JSON, replacing NaN/Inf with None."""
     if obj is None:
         return None
+    import math
     import numpy as np
+    if isinstance(obj, float):
+        return None if (math.isnan(obj) or math.isinf(obj)) else obj
     if isinstance(obj, (np.integer, np.int64)):
         return int(obj)
     if isinstance(obj, (np.floating, np.float64)):
-        return float(obj)
+        v = float(obj)
+        return None if (math.isnan(v) or math.isinf(v)) else v
     if isinstance(obj, np.ndarray):
-        return obj.tolist()
+        return _make_serializable(obj.tolist())
     if isinstance(obj, dict):
         return {k: _make_serializable(v) for k, v in obj.items()}
-    if isinstance(obj, list):
+    if isinstance(obj, (list, tuple)):
         return [_make_serializable(x) for x in obj]
     return obj
 
@@ -304,19 +299,14 @@ def api_scan():
 
     stock_chart = get_stock_chart_data(ticker) if ticker else None
 
-    # Ensure metrics values are JSON-serializable (e.g. numpy floats)
-    if fundamentals and fundamentals.get("metrics"):
-        fundamentals = dict(fundamentals)
-        fundamentals["metrics"] = _make_serializable(fundamentals["metrics"])
-
-    return jsonify({
+    result = {
         "market": market,
         "movers": movers,
         "news": display_news,
         "wire_label": (company or ticker_short or ticker) if company_news else None,
         "company": company or ticker_short or ticker or "",
-        "sentiment": _make_serializable(sentiment),
-        "volume": _make_serializable(volume),
+        "sentiment": sentiment,
+        "volume": volume,
         "spike": float(spike) if spike is not None else 1.0,
         "insight": insight,
         "technical": technical,
@@ -325,7 +315,8 @@ def api_scan():
         "resolved_ticker": ticker,
         "stock_chart": stock_chart,
         "error": None
-    })
+    }
+    return jsonify(_make_serializable(result))
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", debug=True, port=5001)
