@@ -11,12 +11,14 @@ function StockChart({ initialData, ticker, period, periodLabel }) {
   const [prices, setPrices] = useState(initialData?.prices || [])
 
   useEffect(() => {
-    setLabels(initialData?.labels || [])
-    setPrices(initialData?.prices || [])
-  }, [initialData])
-
-  useEffect(() => {
-    if (!ticker || !period || period === '3mo') return
+    if (!ticker || !period) return
+    // Default scan chart is 3mo; reuse that payload instead of refetching on first paint.
+    // After viewing another period, we must restore from initialData when switching back to 3mo.
+    if (period === '3mo') {
+      setLabels(initialData?.labels || [])
+      setPrices(initialData?.prices || [])
+      return
+    }
     let cancelled = false
     getChart(ticker, period)
       .then((data) => {
@@ -29,7 +31,7 @@ function StockChart({ initialData, ticker, period, periodLabel }) {
     return () => {
       cancelled = true
     }
-  }, [ticker, period])
+  }, [ticker, period, initialData])
 
   useEffect(() => {
     const el = canvasRef.current

@@ -15,8 +15,7 @@
    - **Production:** Build and serve via Node:
      ```bash
      cd NTWeb
-     npm install
-     npm run build
+     npm install -r requirement.txt
      npm start
      ```
      Open **http://localhost:3000**. The app will show a loading screen until the backend reports `modules_loaded: true`, then the dashboard appears.

@@ -14,11 +14,11 @@ const INDICATORS_USED = ['RSI', 'MACD', 'StochRSI', 'Bollinger Bands']
 const NEWS_INITIAL_COUNT = 4
 
 const AI_LOADING_STEPS = [
-  { key: 'stock', icon: '📊', label: 'Fetching stock data...' },
-  { key: 'news', icon: '📰', label: 'Fetching latest news...' },
-  { key: 'company', icon: '🏢', label: 'Fetching company details...' },
-  { key: 'ta', icon: '⚙️', label: 'Analyzing technical indicators...' },
-  { key: 'ai', icon: '🤖', label: 'Generating AI insights...' },
+  { key: 'stock', label: 'Fetch stock name…' },
+  { key: 'news', label: 'Fetch news…' },
+  { key: 'company', label: 'Gather data…' },
+  { key: 'ta', label: 'Analyze market…' },
+  { key: 'ai', label: 'NeuralTrade is thinking…' },
 ]
 
 function sleep(ms) {
@@ -223,6 +223,10 @@ export default function Dashboard() {
   const [stepDetailByKey, setStepDetailByKey] = useState({})
   const [stillWorkingByKey, setStillWorkingByKey] = useState({})
   const [confidenceBarReady, setConfidenceBarReady] = useState(false)
+  const [streamingInsight, setStreamingInsight] = useState('')
+  const [insightResetKey, setInsightResetKey] = useState(0)
+  // Button/spinner: tied to server round-trip only — not TypingEffect (avoids stuck "Analyzing…").
+  const [waitingForScanResult, setWaitingForScanResult] = useState(false)
 
   const mainRef = useRef(null)
   const searchRef = useRef(null)
@@ -253,7 +257,7 @@ export default function Dashboard() {
     return () => el.removeEventListener('scroll', handler)
   }, [])
 
-  const isBusy = analysisState === ANALYSIS_STATES.loading || analysisState === ANALYSIS_STATES.analyzing
+  const isBusy = waitingForScanResult
 
   // ── Scroll to results on analyze start ──
   useEffect(() => {
@@ -271,11 +275,13 @@ export default function Dashboard() {
       const q = (query || '').trim()
       if (!q) return
       const runId = ++runIdRef.current
+      setInsightResetKey(runId)
 
       setAnalysisState(ANALYSIS_STATES.loading)
       setError(null)
       setScanData(null)
-      setCompany('')
+      setCompany(q)
+      setStreamingInsight('')
       setNewsExpanded(false)
       setActiveStepIndex(0)
       setCompletedSteps(0)
@@ -291,7 +297,9 @@ export default function Dashboard() {
       }, {})
 
       try {
+        setWaitingForScanResult(true)
         let data = null
+        const insightStreamStartedRef = { current: false }
 
         // Prefer streaming phases if supported.
         if (typeof window !== 'undefined' && 'EventSource' in window) {
@@ -310,18 +318,32 @@ export default function Dashboard() {
                   return
                 }
 
+                if (evt.type === 'snapshot' && evt.data) {
+                  if (runIdRef.current !== runId) return
+                  // Do not mount results until all 5 steps finish (server sends data on `result` only).
+                  setShowLoadingPanel(true)
+                  setLoadingExiting(false)
+                  setCompletedSteps(AI_LOADING_STEPS.length - 1)
+                  setActiveStepIndex(AI_LOADING_STEPS.length - 1)
+                  setInsightEntered(false)
+                  setStepDetailByKey((p) => ({ ...p, ai: p.ai || 'Warming up the model…' }))
+                }
+
                 if (evt.type === 'phase') {
                   const idx = stepIndexByKey[evt.phase]
                   if (idx != null) {
                     if (evt.status === 'start') {
                       setActiveStepIndex(idx)
                     }
-                    if (evt.status === 'done') {
+                    if (evt.status === 'done' && evt.phase !== 'ai') {
                       setCompletedSteps((prev) => Math.max(prev, idx + 1))
+                    }
+                    if (evt.status === 'done' && evt.phase === 'ai') {
+                      setCompletedSteps(AI_LOADING_STEPS.length)
                     }
                   }
                   if (evt.phase === 'ai' && evt.status === 'start') {
-                    setStepDetailByKey((p) => ({ ...p, ai: 'Generating final insight' }))
+                    setStepDetailByKey((p) => ({ ...p, ai: p.ai || 'Warming up the model…' }))
                     setStillWorkingByKey((p) => ({ ...p, ai: false }))
                   }
                   if (evt.phase === 'ta' && evt.status === 'start') {
@@ -346,6 +368,20 @@ export default function Dashboard() {
                   }
                 }
 
+                if (evt.type === 'insight_delta' && evt.text) {
+                  insightStreamStartedRef.current = true
+                  setStreamingInsight((prev) => prev + evt.text)
+                  typingRunIdRef.current = runId
+                  setStillWorkingByKey((p) => ({ ...p, ai: false }))
+                }
+
+                if (evt.type === 'insight_replace' && evt.insight != null) {
+                  insightStreamStartedRef.current = true
+                  setStreamingInsight(evt.insight)
+                  typingRunIdRef.current = runId
+                  setStillWorkingByKey((p) => ({ ...p, ai: false }))
+                }
+
                 if (evt.type === 'result') {
                   safeCleanup()
                   resolve(evt.data)
@@ -364,12 +400,19 @@ export default function Dashboard() {
 
         if (runIdRef.current !== runId) return
         setCompany(data.company || q)
+        setStreamingInsight('')
         setScanData(data)
         setError(data.error || null)
-        if (data?.insight) {
+        setCompletedSteps(AI_LOADING_STEPS.length)
+
+        if (data?.error) {
+          setAnalysisState(ANALYSIS_STATES.idle)
+          setShowLoadingPanel(false)
+          setLoadingExiting(false)
+          setInsightEntered(false)
+        } else if (data?.insight) {
           setAnalysisState(ANALYSIS_STATES.analyzing)
           typingRunIdRef.current = runId
-          // Smooth handoff: fade out loader, then fade in AI insight.
           setLoadingExiting(true)
           setTimeout(() => {
             if (runIdRef.current !== runId) return
@@ -379,16 +422,28 @@ export default function Dashboard() {
           }, 360)
         } else {
           setAnalysisState(ANALYSIS_STATES.complete)
-          setShowLoadingPanel(false)
+          setLoadingExiting(true)
+          setTimeout(() => {
+            if (runIdRef.current !== runId) return
+            setShowLoadingPanel(false)
+            setLoadingExiting(false)
+            setInsightEntered(true)
+          }, 360)
         }
       } catch (err) {
         if (runIdRef.current !== runId) return
+        setWaitingForScanResult(false)
         runIdRef.current++ // cancel any in-flight step simulation
         setError(err.message || 'Scan failed')
         setScanData(null)
+        setStreamingInsight('')
         setAnalysisState(ANALYSIS_STATES.idle)
         setShowLoadingPanel(false)
         setLoadingExiting(false)
+      } finally {
+        if (runIdRef.current === runId) {
+          setWaitingForScanResult(false)
+        }
       }
     },
     [query, setAnalysisState],
@@ -415,8 +470,13 @@ export default function Dashboard() {
   const wireLabel = scanData?.wire_label || null
   const resolvedTicker = scanData?.resolved_ticker || null
   const stockChart = scanData?.stock_chart || null
-  const insight = scanData?.insight || ''
-  const insightSummary = useMemo(() => makeInsightSummary(insight), [insight])
+  const insightBody = scanData?.insight || streamingInsight
+  const insightTrimmed = String(insightBody || '').trim()
+  const showInsightSection =
+    !showLoadingPanel && (!!insightTrimmed || analysisState === ANALYSIS_STATES.analyzing)
+  const insightAwaitingFirstToken =
+    analysisState === ANALYSIS_STATES.analyzing && !insightTrimmed
+  const insightSummary = useMemo(() => makeInsightSummary(insightBody), [insightBody])
   const technical = scanData?.technical || null
   const fundamentals = scanData?.fundamentals || null
   const sentiment = scanData?.sentiment || {}
@@ -432,6 +492,14 @@ export default function Dashboard() {
   const confidenceInfo = useMemo(() => confidenceMeta(confidencePct), [confidencePct])
   const signalClass = signal === 'BUY' ? 'buy' : signal === 'SELL' ? 'sell' : 'hold'
   const hasSentimentData = Object.keys(sentiment).length > 0 || Object.keys(volume).length > 0
+
+  // Once the scan HTTP/SSE round-trip finishes, leave "analyzing" even if TypingEffect onDone never runs.
+  useEffect(() => {
+    if (waitingForScanResult) return
+    if (analysisState !== ANALYSIS_STATES.analyzing) return
+    if (!insightTrimmed) return
+    setAnalysisState(ANALYSIS_STATES.complete)
+  }, [waitingForScanResult, analysisState, insightTrimmed])
 
   // Animate confidence bar fill on (re)load.
   useEffect(() => {
@@ -456,7 +524,7 @@ export default function Dashboard() {
             <div className="logo-icon">
               <LogoIcon />
             </div>
-            <span className="logo-text">AI Stock <span>Analyzer</span></span>
+            <span className="logo-text">NeuralTrade</span>
           </div>
           <div className="nav-links">
             <span className="nav-link active" onClick={scrollToTop}>Dashboard</span>
@@ -488,9 +556,9 @@ export default function Dashboard() {
                 <polyline points="16,7 22,7 22,13" />
               </svg>
             </div>
-            <h1 className="hero-title">AI-Powered Stock Intelligence</h1>
+            <h1 className="hero-title">NeuralTrade Intelligence</h1>
             <p className="hero-subtitle">
-              Analyze stocks using technical indicators, market trends, and AI-driven insights
+              AI-powered insights for smarter stock decisions
             </p>
           </section>
 
@@ -524,19 +592,7 @@ export default function Dashboard() {
 
           {/* Loading / Results */}
           <div ref={resultsRef}>
-            {analysisState === ANALYSIS_STATES.loading && (
-              <LoadingSteps
-                title={`Analyzing ${query || 'your request'}…`}
-                subtitle="Gathering signals and context"
-                steps={AI_LOADING_STEPS}
-                activeIndex={activeStepIndex}
-                completedCount={completedSteps}
-                exiting={loadingExiting}
-                detailByKey={stepDetailByKey}
-                stillWorkingByKey={stillWorkingByKey}
-              />
-            )}
-            {showLoadingPanel && analysisState !== ANALYSIS_STATES.loading && (
+            {showLoadingPanel && (
               <LoadingSteps
                 title={`Analyzing ${query || 'your request'}…`}
                 subtitle="Gathering signals and context"
@@ -549,8 +605,8 @@ export default function Dashboard() {
               />
             )}
 
-            {/* Results */}
-            {company && !error && analysisState !== ANALYSIS_STATES.loading && (
+            {/* Results — only after the 5-step pipeline finishes (scan data applied on terminal `result`) */}
+            {scanData && !error && !showLoadingPanel && (
               <div className="results">
                 {resolvedTicker && (
                   <div className="ticker-badge">
@@ -559,7 +615,7 @@ export default function Dashboard() {
                 )}
 
                 {/* Brain Container: AI Decision + AI Insight */}
-                {(technical || (insightSummary && !showLoadingPanel)) && (
+                {(technical || showInsightSection) && (
                   <section className="brain-container" aria-label="AI Brain">
                     {technical && (
                       <div className={`decision-card ${signalClass}`}>
@@ -586,32 +642,56 @@ export default function Dashboard() {
                       </div>
                     )}
 
-                    {technical && insightSummary && !showLoadingPanel && <div className="brain-divider" />}
+                    {technical && showInsightSection && (!!insightTrimmed || insightAwaitingFirstToken) && (
+                      <div className="brain-divider" />
+                    )}
 
-                    {insightSummary && !showLoadingPanel && (
+                    {showInsightSection && (
                       <div className={`ai-insight-summary${insightEntered ? ' entered' : ''}`}>
                         <div className="ai-insight-title">Detailed AI Breakdown</div>
                         <div className="ai-insight-body">
-                          <TypingEffect
-                            text={insightSummary}
-                            start={analysisState === ANALYSIS_STATES.analyzing || analysisState === ANALYSIS_STATES.complete}
-                            onDone={() => {
-                              if (analysisState !== ANALYSIS_STATES.analyzing) return
-                              if (runIdRef.current !== typingRunIdRef.current) return
-                              setAnalysisState(ANALYSIS_STATES.complete)
-                            }}
-                            minDelayMs={6}
-                            maxDelayMs={14}
-                            initialDelayMs={120}
-                            className="ai-insight-typing"
-                          />
+                          {insightAwaitingFirstToken ? (
+                            <div
+                              className="ai-insight-pending ai-insight-typing"
+                              aria-live="polite"
+                              aria-busy="true"
+                            >
+                              <span className="ai-insight-pending-label">
+                                {stepDetailByKey.ai || 'Preparing analysis…'}
+                              </span>
+                              <span className="ai-insight-pending-cursor" aria-hidden="true" />
+                            </div>
+                          ) : (
+                            <TypingEffect
+                              text={insightBody}
+                              resetKey={insightResetKey}
+                              streamSync={Boolean(streamingInsight)}
+                              start={
+                                analysisState === ANALYSIS_STATES.analyzing ||
+                                analysisState === ANALYSIS_STATES.complete
+                              }
+                              onDone={() => {
+                                if (analysisState !== ANALYSIS_STATES.analyzing) return
+                                if (runIdRef.current !== typingRunIdRef.current) return
+                                setAnalysisState(ANALYSIS_STATES.complete)
+                              }}
+                              minDelayMs={6}
+                              maxDelayMs={14}
+                              initialDelayMs={streamingInsight ? 0 : 120}
+                              allowComplete={!streamingInsight}
+                              className="ai-insight-typing"
+                            />
+                          )}
+                        </div>
+
+                        <div className="ai-insight-disclaimer">
+                          NeuralTrade provides informational analysis only and is not a financial advisor. Always do your own research before making investment decisions.
                         </div>
 
                         <div className="section-header">Market Scenarios</div>
                         <div className="scenario-grid">
                           <div className="scenario-card bullish">
                             <div className="scenario-title">
-                              <span className="scenario-emoji" aria-hidden="true">📈</span>
                               Bullish Scenario
                             </div>
                             <div className="scenario-body">
@@ -620,7 +700,6 @@ export default function Dashboard() {
                           </div>
                           <div className="scenario-card bearish">
                             <div className="scenario-title">
-                              <span className="scenario-emoji" aria-hidden="true">📉</span>
                               Bearish Scenario
                             </div>
                             <div className="scenario-body">

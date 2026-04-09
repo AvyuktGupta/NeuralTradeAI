@@ -16,6 +16,9 @@ export default function TypingEffect({
   minDelayMs = 14,
   maxDelayMs = 28,
   initialDelayMs = 350,
+  resetKey = 0,
+  streamSync = false,
+  allowComplete = true,
   className = '',
   onDone,
 }) {
@@ -24,44 +27,49 @@ export default function TypingEffect({
 
   const [visibleCount, setVisibleCount] = useState(0)
   const doneRef = useRef(false)
-  const timersRef = useRef([])
+  const resetKeyRef = useRef(resetKey)
 
   useEffect(() => {
-    timersRef.current.forEach((t) => clearTimeout(t))
-    timersRef.current = []
-    doneRef.current = false
-    setVisibleCount(0)
-  }, [text, start])
-
-  useEffect(() => {
-    if (!start) return
-    if (!text) return
-
-    const kick = setTimeout(() => {
-      const tick = () => {
-        setVisibleCount((c) => {
-          const next = Math.min(text.length, c + 1)
-          if (next >= text.length && !doneRef.current) {
-            doneRef.current = true
-            onDone?.()
-          }
-          return next
-        })
-        if (!doneRef.current) {
-          const nextDelay = getRandomInt(safeMin, safeMax)
-          const t = setTimeout(tick, nextDelay)
-          timersRef.current.push(t)
-        }
-      }
-      tick()
-    }, Math.max(0, initialDelayMs))
-
-    timersRef.current.push(kick)
-    return () => {
-      timersRef.current.forEach((t) => clearTimeout(t))
-      timersRef.current = []
+    if (resetKeyRef.current !== resetKey) {
+      resetKeyRef.current = resetKey
+      doneRef.current = false
+      setVisibleCount(0)
     }
-  }, [start, text, safeMin, safeMax, initialDelayMs, onDone])
+  }, [resetKey])
+
+  useEffect(() => {
+    if (!start || !text) return
+    if (visibleCount >= text.length) return
+
+    const backlog = text.length - visibleCount
+    let delay
+    if (visibleCount === 0) {
+      delay = Math.max(0, initialDelayMs)
+    } else if (streamSync && backlog > 28) {
+      delay = clamp(Math.floor(safeMin * 0.45), 4, 12)
+    } else {
+      delay = getRandomInt(safeMin, safeMax)
+    }
+
+    const step =
+      streamSync && backlog > 22 ? Math.min(backlog, Math.max(2, Math.ceil(backlog / 18))) : 1
+
+    const t = setTimeout(() => {
+      setVisibleCount((c) => Math.min(text.length, c + step))
+    }, delay)
+
+    return () => clearTimeout(t)
+  }, [start, text, text.length, visibleCount, streamSync, safeMin, safeMax, initialDelayMs])
+
+  useEffect(() => {
+    if (!start || !text) return
+    if (visibleCount < text.length) return
+    if (text.length === 0) return
+    if (!allowComplete) return
+    if (doneRef.current) return
+    doneRef.current = true
+    onDone?.()
+  }, [start, text, text.length, visibleCount, onDone, allowComplete])
 
   const shown = text.slice(0, visibleCount)
   const isDone = start && text && visibleCount >= text.length

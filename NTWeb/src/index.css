@@ -389,6 +389,7 @@ a {
 
 .loading-step.current {
   color: var(--accent);
+  text-shadow: 0 0 14px rgba(47, 129, 247, 0.18);
 }
 
 .step-indicator {
@@ -524,6 +525,15 @@ a {
   margin-top: 6px;
 }
 
+.ai-loading-disclaimer {
+  margin-top: 14px;
+  text-align: center;
+  font-size: 11px;
+  line-height: 1.55;
+  color: rgba(230, 237, 243, 0.60);
+  opacity: 0.55;
+}
+
 .ai-step {
   display: flex;
   align-items: center;
@@ -623,6 +633,39 @@ a {
   animation: none;
   white-space: normal;
   overflow-wrap: anywhere;
+}
+
+.ai-thinking-text--enter {
+  animation: aiThinkingLineIn 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes aiThinkingLineIn {
+  from {
+    opacity: 0;
+    filter: blur(4px);
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
+    transform: translateY(0);
+  }
+}
+
+.ai-thinking-ellipsis {
+  margin-left: 0.06em;
+  opacity: 0.55;
+  animation: aiThinkingEllipsis 1.4s ease-in-out infinite;
+}
+
+@keyframes aiThinkingEllipsis {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 0.85;
+  }
 }
 
 .ai-step.active .ai-step-label {
@@ -790,12 +833,37 @@ a {
   margin-top: 12px;
 }
 
+.ai-insight-pending {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 1.8em;
+}
+
+.ai-insight-pending-label {
+  font-style: italic;
+  color: rgba(230, 237, 243, 0.62);
+}
+
+.ai-insight-pending-cursor {
+  display: inline-block;
+  width: 10px;
+  height: 1.15em;
+  transform: translateY(2px);
+  border-radius: 2px;
+  background: rgba(57, 208, 208, 0.95);
+  box-shadow: 0 0 16px rgba(57, 208, 208, 0.35);
+  animation: blink 950ms step-end infinite;
+}
+
 .ai-insight-typing {
   font-size: 14px;
-  line-height: 1.85;
-  color: rgba(230, 237, 243, 0.72);
-  font-weight: 300;
-  font-style: italic;
+  line-height: 1.8;
+  color: rgba(230, 237, 243, 0.86);
+  font-weight: 420;
+  font-style: normal;
+  letter-spacing: 0.01em;
 }
 
 .ai-insight-typing .ai-typing-cursor {
@@ -959,6 +1027,13 @@ a {
 
 .brain-container .section-header {
   margin-top: 20px;
+}
+
+.ai-insight-disclaimer {
+  margin-top: 10px;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: rgba(230, 237, 243, 0.58);
 }
 
 .decision-card::before {

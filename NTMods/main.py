@@ -21,7 +21,7 @@ load_dotenv()
 warnings.filterwarnings("ignore")
 
 # -----------------------------------------------------
-# 🔧 CONFIG
+# CONFIG
 FUSION_WEIGHTS = {
     "technical": float(os.getenv("FUSION_WEIGHT_TECHNICAL", "0.35")),
     "fundamental": float(os.getenv("FUSION_WEIGHT_FUNDAMENTAL", "0.35")),
@@ -35,7 +35,7 @@ STOCKS = os.getenv("STOCKS_LIST", "TVSMOTOR.NS,TCS.NS,RELIANCE.NS").split(",")
 CANDLE_TIMEFRAME_MINUTES = int(os.getenv("CANDLE_TIMEFRAME_MINUTES", "15"))
 
 # -----------------------------------------------------
-# 🧠 Fusion Logic
+# Fusion Logic
 def fuse_models(ticker):
     """
     Fuse multiple analysis models into a unified verdict.
@@ -47,11 +47,11 @@ def fuse_models(ticker):
         dict: Fusion results with ticker, fusion_score, and verdict
     """
     # Run indicator module (technical analysis)
-    print(f"  🔍 Running technical analysis for {ticker}...")
+    print(f"  Running technical analysis for {ticker}...")
     technical = run_indicator_module({"ticker": ticker}, timeframe_minutes=CANDLE_TIMEFRAME_MINUTES)
     
     # Run trust module (fundamental analysis)
-    print(f"  🧠 Running fundamental analysis for {ticker}...")
+    print(f"  Running fundamental analysis for {ticker}...")
     fundamental = run_trust_module({"ticker": ticker})
 
     # Sentiment module removed (previously stubbed); keep neutral placeholder for fusion scoring.
@@ -76,11 +76,11 @@ def fuse_models(ticker):
 
     # Final verdict
     if fusion_score >= 75:
-        verdict = "BUY ✅"
+        verdict = "BUY"
     elif fusion_score >= 55:
-        verdict = "HOLD ⚖️"
+        verdict = "HOLD"
     else:
-        verdict = "SELL 🔻"
+        verdict = "SELL"
 
     # Determine short sentiment labels
     fund_label = "Strong" if f_score >= 75 else "Mixed" if f_score >= 55 else "Weak"
@@ -88,7 +88,7 @@ def fuse_models(ticker):
 
     # Prepare detailed report for Telegram/logging
     detailed_report = (
-        f"📊 {ticker}\n"
+        f"{ticker}\n"
         f"Fundamentals: {fundamental['verdict']} ({f_score:.1f})\n"
         f"Technicals: {technical['signal']} ({t_conf:.1f})\n"
         f"Sentiment: {sentiment['verdict']} ({s_score})\n"
@@ -106,20 +106,20 @@ def fuse_models(ticker):
 
 
 # -----------------------------------------------------
-# 🚀 MAIN EXECUTION
+# MAIN EXECUTION
 if __name__ == "__main__":
-    print("🚀 M³A Fusion Machine Started\n")
+    print("M³A Fusion Machine Started\n")
     all_reports = []
 
     for stock in STOCKS:
         try:
-            print(f"📈 Analyzing {stock}...")
+            print(f"Analyzing {stock}...")
             report = fuse_models(stock)
             if report:
                 all_reports.append(report)
-                print(f"✅ Completed analysis for {stock}\n")
+                print(f"Completed analysis for {stock}\n")
         except Exception as e:
-            print(f"❌ Error analyzing {stock}: {e}")
+            print(f"Error analyzing {stock}: {e}")
             traceback.print_exc()
 
     # Final summary
@@ -127,7 +127,7 @@ if __name__ == "__main__":
     hold_count = sum(1 for r in all_reports if "HOLD" in r["verdict"])
     sell_count = sum(1 for r in all_reports if "SELL" in r["verdict"])
 
-    summary_text = f"\n📊 Summary: {buy_count} BUY, {hold_count} HOLD, {sell_count} SELL"
+    summary_text = f"\nSummary: {buy_count} BUY, {hold_count} HOLD, {sell_count} SELL"
     print(summary_text)
 
     # Send detailed reports to Telegram if enabled
@@ -135,7 +135,7 @@ if __name__ == "__main__":
     
     if telegram_enabled and all_reports:
         # Build comprehensive message
-        message_lines = ["📊 *M³A Fusion Machine - Analysis Report*\n"]
+        message_lines = ["*M³A Fusion Machine - Analysis Report*\n"]
         
         for report in all_reports:
             message_lines.append(report["detailed_report"])

@@ -37,7 +37,7 @@ export default function AboutModal({ onClose }) {
 
         <h2 className="modal-title">About This Project</h2>
         <p className="modal-text">
-          This AI Stock Analyzer combines technical indicators and market data
+          NeuralTrade combines technical indicators and market data
           to generate intelligent trading insights. It processes multiple data
           streams in real time to deliver actionable analysis.
         </p>

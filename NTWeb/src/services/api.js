@@ -49,6 +49,9 @@ export async function scan(company) {
  * Emits:
  *  - { type: 'phase', phase, status }
  *  - { type: 'still', phase, message }
+ *  - { type: 'insight_delta', text }
+ *  - { type: 'insight_replace', insight }
+ *  - { type: 'snapshot', data } — charts/sentiment/technicals before insight finishes streaming
  *  - { type: 'error', message }
  *  - { type: 'result', data }
  */
@@ -74,6 +77,27 @@ export function scanStream(company, { onEvent, onError } = {}) {
     try {
       const data = JSON.parse(e.data)
       emit({ type: 'still', ...data })
+    } catch (_) {}
+  })
+
+  es.addEventListener('insight_delta', (e) => {
+    try {
+      const data = JSON.parse(e.data)
+      emit({ type: 'insight_delta', ...data })
+    } catch (_) {}
+  })
+
+  es.addEventListener('insight_replace', (e) => {
+    try {
+      const data = JSON.parse(e.data)
+      emit({ type: 'insight_replace', ...data })
+    } catch (_) {}
+  })
+
+  es.addEventListener('snapshot', (e) => {
+    try {
+      const data = JSON.parse(e.data)
+      emit({ type: 'snapshot', data })
     } catch (_) {}
   })
 

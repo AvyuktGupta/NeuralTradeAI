@@ -132,7 +132,10 @@ def analyze_single_timeframe(ticker, interval):
         elif close.iloc[-1] > bb.bollinger_hband().iloc[-1]:
             sell += 1
 
-        confidence = round((abs(buy - sell) / 4) * 100, 1)
+        # Confidence = dominance among indicators that actually voted.
+        # This keeps "HOLD" (tie) at ~50% instead of 0%, while still giving 100% when all voters agree.
+        voters = buy + sell
+        confidence = round(((max(buy, sell) / max(1, voters)) * 100), 1)
         signal = "BUY" if buy > sell else "SELL" if sell > buy else "HOLD"
 
         # Normalize trend label
@@ -160,7 +163,7 @@ def analyze_single_timeframe(ticker, interval):
         }
 
     except Exception as e:
-        print(f"⚠️ Error in {ticker} {interval}: {e}")
+        print(f"Error in {ticker} {interval}: {e}")
         return None
 
 

@@ -35,7 +35,7 @@ def send_telegram_message(message: str, parse_mode: str = "Markdown") -> bool:
         return False
     
     if not bot_token or not chat_id:
-        print("⚠️ Telegram credentials not configured")
+        print("Telegram credentials not configured")
         return False
     
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
@@ -48,13 +48,13 @@ def send_telegram_message(message: str, parse_mode: str = "Markdown") -> bool:
     try:
         response = requests.post(url, data=payload)
         if response.status_code == 200:
-            print("✅ Message sent to Telegram!")
+            print("Message sent to Telegram.")
             return True
         else:
-            print(f"❌ Failed to send message: {response.text}")
+            print(f"Failed to send message: {response.text}")
             return False
     except Exception as e:
-        print(f"❌ Error sending Telegram message: {e}")
+        print(f"Error sending Telegram message: {e}")
         return False
 
 
@@ -77,11 +77,11 @@ def get_chat_id(bot_token: str) -> str:
         
         if data.get('result'):
             chat_id = str(data['result'][-1]['message']['chat']['id'])
-            print(f"💬 Chat ID: {chat_id}")
+            print(f"Chat ID: {chat_id}")
             return chat_id
         else:
-            print("😕 No messages found. Send /start to your bot on Telegram.")
+            print("No messages found. Send /start to your bot on Telegram.")
             return ""
     except Exception as e:
-        print(f"❌ Error getting chat ID: {e}")
+        print(f"Error getting chat ID: {e}")
         return ""

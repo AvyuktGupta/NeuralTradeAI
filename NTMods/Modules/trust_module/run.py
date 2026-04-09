@@ -268,36 +268,36 @@ def compute_ratios_and_scores(bundle):
             prev = revenue[i-1] if revenue[i-1] != 0 else 1e-6
             yoy.append((revenue[i] / prev - 1) * 100.0)
         if any(abs(x) > 150 for x in yoy):
-            reasons.append("⚠️ Very large revenue spike (>150%) detected — investigate one-off items or mergers.")
+            reasons.append("Very large revenue spike (>150%) detected — investigate one-off items or mergers.")
     if netincome and len(netincome) >= 3:
         yoy_n = []
         for i in range(1, len(netincome)):
             prev = netincome[i-1] if netincome[i-1] != 0 else 1e-6
             yoy_n.append((netincome[i] / prev - 1) * 100.0)
         if any(abs(x) > 300 for x in yoy_n):
-            reasons.append("⚠️ Very large net income spike (>300%) detected — could indicate extraordinary items or accounting adjustments.")
+            reasons.append("Very large net income spike (>300%) detected — could indicate extraordinary items or accounting adjustments.")
 
     if revenue_cagr is not None and eps_growth is not None:
         if revenue_cagr > 10 and (eps_growth is not None and eps_growth < 0):
-            reasons.append("⚠️ Revenue growing while EPS is declining — possible margin compression or accounting issues.")
+            reasons.append("Revenue growing while EPS is declining — possible margin compression or accounting issues.")
 
     if debt and len(debt) >= 2 and equity and len(equity) >= 2:
         try:
             last_de = (debt[-1] / equity[-1]) if equity[-1] != 0 else None
             prev_de = (debt[-2] / equity[-2]) if equity[-2] != 0 else None
             if last_de is not None and prev_de is not None and last_de > prev_de * 1.5:
-                reasons.append("⚠️ Rapid increase in debt-to-equity ratio detected.")
+                reasons.append("Rapid increase in debt-to-equity ratio detected.")
         except Exception:
             pass
 
     if fcf_trend is not None and fcf_trend < -20:
-        reasons.append("⚠️ Free cash flow dropped a lot in recent years — this could be risky.")
+        reasons.append("Free cash flow dropped a lot in recent years — this could be risky.")
 
     if current_ratio is not None and current_ratio < 0.8:
-        reasons.append("⚠️ Current ratio < 0.8 — potential short-term liquidity issues.")
+        reasons.append("Current ratio < 0.8 — potential short-term liquidity issues.")
 
     if roe is not None and roe < 5:
-        reasons.append("⚠️ ROE is very low (<5%) — poor capital efficiency.")
+        reasons.append("ROE is very low (<5%) — poor capital efficiency.")
 
     total_weight = sum(WEIGHTS.values())
     weighted_sum = 0.0
@@ -357,7 +357,7 @@ def analyze_fundamentals(ticker):
         }
         return result
     except Exception as e:
-        print("❌ Fundamental analysis failed:", e)
+        print("Fundamental analysis failed:", e)
         return None
 
 

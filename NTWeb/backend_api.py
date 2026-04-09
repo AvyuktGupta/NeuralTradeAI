@@ -20,8 +20,8 @@ import yfinance as yf
 import requests
 from data_collector import fetch_news_api, fetch_google_news, parse_timestamp
 from signal_engine import process_signals
-from insight_engine import generate_insight
-from datetime import datetime
+from insight_engine import generate_insight, produce_insight_stream_queue
+from datetime import datetime, timedelta, timezone
 
 # Allow importing NTMods (sibling folder: NeuralTradeModules)
 _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -35,8 +35,9 @@ app = Flask(__name__)
 # Modules are considered loaded when this process is running (imports succeeded at startup)
 MODULES_LOADED = True
 
-# News + sentiment configuration
-NEWS_LATEST_COUNT = 50
+# News + sentiment: use all distinct articles from the last N days (no fixed headline count).
+NEWS_RECENT_DAYS = 7
+NEWS_FETCH_PAGE_SIZE = 100
 
 # --- Resolve company name or ticker to yfinance symbol ---
 _CRYPTO_MAP = {"BTC": "BTC-USD", "BITCOIN": "BTC-USD", "ETH": "ETH-USD", "ETHEREUM": "ETH-USD"}
@@ -165,9 +166,10 @@ def _make_serializable(obj):
     return obj
 
 
-def _dedup_sort_and_trim_news(items, limit=NEWS_LATEST_COUNT):
+def _dedup_sort_and_filter_recent_news(items, days=NEWS_RECENT_DAYS):
     """
-    Deduplicate by URL (preferred) or (text,timestamp), then sort latest-first and trim.
+    Deduplicate by URL (preferred) or (text,timestamp), sort latest-first, keep items
+    published within the last ``days`` days (naive UTC cutoff).
     """
     if not items:
         return []
@@ -190,7 +192,8 @@ def _dedup_sort_and_trim_news(items, limit=NEWS_LATEST_COUNT):
         deduped.append(it)
 
     deduped.sort(key=lambda x: parse_timestamp(x.get("timestamp")), reverse=True)
-    return deduped[: max(1, int(limit or 0))]
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=max(1, int(days)))).replace(tzinfo=None)
+    return [it for it in deduped if parse_timestamp(it.get("timestamp")) >= cutoff]
 
 
 def _sentiment_summary_from_trend(sentiment_trend_dict):
@@ -289,10 +292,14 @@ def api_scan():
 
     company_news = []
     if company:
-        company_news = fetch_news_api(company, page_size=NEWS_LATEST_COUNT) + fetch_google_news(company, page_size=NEWS_LATEST_COUNT)
+        company_news = fetch_news_api(
+            company, page_size=NEWS_FETCH_PAGE_SIZE, days_back=NEWS_RECENT_DAYS
+        ) + fetch_google_news(company, page_size=NEWS_FETCH_PAGE_SIZE, days_back=NEWS_RECENT_DAYS)
         if not company_news and ticker_short:
-            company_news = fetch_news_api(ticker_short, page_size=NEWS_LATEST_COUNT) + fetch_google_news(ticker_short, page_size=NEWS_LATEST_COUNT)
-    company_news = _dedup_sort_and_trim_news(company_news, limit=NEWS_LATEST_COUNT)
+            company_news = fetch_news_api(
+                ticker_short, page_size=NEWS_FETCH_PAGE_SIZE, days_back=NEWS_RECENT_DAYS
+            ) + fetch_google_news(ticker_short, page_size=NEWS_FETCH_PAGE_SIZE, days_back=NEWS_RECENT_DAYS)
+    company_news = _dedup_sort_and_filter_recent_news(company_news, days=NEWS_RECENT_DAYS)
 
     technical = None
     fundamentals = None
@@ -374,6 +381,8 @@ def api_scan_stream():
     Events:
       - phase: {"phase": <key>, "status": "start"|"done"}
       - still: {"phase": <key>, "message": "Still working"}
+      - insight_delta: {"text": "<token chunk from Ollama>"}
+      - insight_replace: {"insight": "<full fallback text>"} (replaces streamed output if invalid)
       - result: <final JSON payload>
       - error: {"message": "..."}
     """
@@ -429,10 +438,14 @@ def api_scan_stream():
             yield sse("phase", {"phase": "news", "status": "start"})
             company_news = []
             if company:
-                company_news = fetch_news_api(company, page_size=NEWS_LATEST_COUNT) + fetch_google_news(company, page_size=NEWS_LATEST_COUNT)
+                company_news = fetch_news_api(
+                    company, page_size=NEWS_FETCH_PAGE_SIZE, days_back=NEWS_RECENT_DAYS
+                ) + fetch_google_news(company, page_size=NEWS_FETCH_PAGE_SIZE, days_back=NEWS_RECENT_DAYS)
                 if not company_news and ticker_short:
-                    company_news = fetch_news_api(ticker_short, page_size=NEWS_LATEST_COUNT) + fetch_google_news(ticker_short, page_size=NEWS_LATEST_COUNT)
-            company_news = _dedup_sort_and_trim_news(company_news, limit=NEWS_LATEST_COUNT)
+                    company_news = fetch_news_api(
+                        ticker_short, page_size=NEWS_FETCH_PAGE_SIZE, days_back=NEWS_RECENT_DAYS
+                    ) + fetch_google_news(ticker_short, page_size=NEWS_FETCH_PAGE_SIZE, days_back=NEWS_RECENT_DAYS)
+            company_news = _dedup_sort_and_filter_recent_news(company_news, days=NEWS_RECENT_DAYS)
             yield sse("phase", {"phase": "news", "status": "done"})
 
             # --- Phase: company details (placeholder for future enrichment) ---
@@ -475,10 +488,7 @@ def api_scan_stream():
                 )
                 return
 
-            # --- Phase: AI insight (may take the longest) ---
-            yield sse("phase", {"phase": "ai", "status": "start"})
-
-            insight = ""
+            # --- UI snapshot: charts + fundamentals + sentiment before insight streams ---
             sentiment = {}
             sentiment_summary = {"verdict": "Neutral", "score": 50}
             volume = {}
@@ -490,56 +500,105 @@ def api_scan_stream():
                 sentiment, volume, source_sent, spike = process_signals(company_news)
                 sentiment_summary = _sentiment_summary_from_trend(sentiment)
                 display_news = company_news
+
+            stock_chart = get_stock_chart_data(ticker) if ticker else None
+
+            if company_news:
                 headlines = [d["text"] for d in company_news[:3]]
                 asset_name = company or ticker_short or ""
             else:
                 headlines = []
                 asset_name = company or ticker_short or ticker or ""
 
-            # Run generate_insight in a background thread so we can emit "still working" ticks.
+            # Start the model before snapshot so time-to-first-token overlaps with SSE + client paint.
+            import queue as queue_mod
             import threading
-            result_holder = {"insight": ""}
-            err_holder = {"err": None}
 
-            def _run():
-                try:
-                    result_holder["insight"] = generate_insight(
-                        asset_name,
-                        spike,
-                        source_sent,
-                        headlines,
-                        technical=technical,
-                    )
-                except Exception as ex:
-                    err_holder["err"] = str(ex)
-
-            th = threading.Thread(target=_run, daemon=True)
+            q = queue_mod.Queue(maxsize=512)
+            th = threading.Thread(
+                target=produce_insight_stream_queue,
+                args=(q, asset_name, spike, source_sent, headlines, technical),
+                daemon=True,
+            )
             th.start()
 
-            # Emit gentle ticks while we wait.
-            import time
-            tick_messages = [
-                "Still working",
-                "Cross-checking signals",
-                "Synthesizing context",
-            ]
-            t0 = time.time()
-            tick_i = 0
-            while th.is_alive():
-                # first tick after a short delay, then periodic ticks
-                time.sleep(0.85 if (time.time() - t0) < 1.2 else 1.0)
-                yield sse("still", {"phase": "ai", "message": tick_messages[tick_i % len(tick_messages)]})
-                tick_i += 1
+            yield sse(
+                "snapshot",
+                _make_serializable(
+                    {
+                        "news": display_news,
+                        "wire_label": (company or ticker_short or ticker) if company_news else None,
+                        "company": company or ticker_short or ticker or "",
+                        "sentiment": sentiment,
+                        "sentiment_summary": sentiment_summary,
+                        "volume": volume,
+                        "spike": float(spike) if spike is not None else 1.0,
+                        "insight": "",
+                        "technical": technical,
+                        "fundamentals": fundamentals,
+                        "resolved_ticker": ticker,
+                        "stock_chart": stock_chart,
+                        "error": None,
+                    }
+                ),
+            )
 
-            if err_holder["err"]:
-                yield sse("error", {"message": err_holder["err"]})
-                insight = ""
-            else:
-                insight = result_holder["insight"] or ""
+            # --- Phase: AI insight (may take the longest) ---
+            yield sse("phase", {"phase": "ai", "status": "start"})
+
+            tick_messages = [
+                "Warming up the model…",
+                "Cross-checking signals…",
+                "Synthesizing context…",
+            ]
+            tick_i = 0
+            insight = ""
+            terminal = False
+            while not terminal:
+                try:
+                    kind, data = q.get(timeout=0.65)
+                except queue_mod.Empty:
+                    if not th.is_alive():
+                        while True:
+                            try:
+                                kind, data = q.get_nowait()
+                                if kind == "delta":
+                                    yield sse("insight_delta", {"text": data})
+                                elif kind == "done":
+                                    insight = data or ""
+                                    terminal = True
+                                    break
+                                elif kind == "replace":
+                                    insight = data or ""
+                                    yield sse("insight_replace", {"insight": insight})
+                                    terminal = True
+                                    break
+                            except queue_mod.Empty:
+                                break
+                        if terminal:
+                            break
+                        terminal = True
+                        break
+                    yield sse(
+                        "still",
+                        {"phase": "ai", "message": tick_messages[tick_i % len(tick_messages)]},
+                    )
+                    tick_i += 1
+                    continue
+
+                if kind == "delta":
+                    yield sse("insight_delta", {"text": data})
+                elif kind == "done":
+                    insight = data or ""
+                    terminal = True
+                elif kind == "replace":
+                    insight = data or ""
+                    yield sse("insight_replace", {"insight": insight})
+                    terminal = True
+
+            th.join(timeout=5.0)
 
             yield sse("phase", {"phase": "ai", "status": "done"})
-
-            stock_chart = get_stock_chart_data(ticker) if ticker else None
 
             yield sse(
                 "result",
