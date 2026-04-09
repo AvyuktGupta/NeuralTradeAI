@@ -13,7 +13,7 @@ if os.path.isfile(_env_file):
     from dotenv import load_dotenv
     load_dotenv(_env_file)
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response, stream_with_context
 import re
 import json
 import yfinance as yf
@@ -29,12 +29,14 @@ if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 from NTMods.Modules.indicator_module.run import run_indicator_module
 from NTMods.Modules.trust_module.run import run_trust_module
-from NTMods.Modules.sentiment_module.run import run_sentiment_module
 
 app = Flask(__name__)
 
 # Modules are considered loaded when this process is running (imports succeeded at startup)
 MODULES_LOADED = True
+
+# News + sentiment configuration
+NEWS_LATEST_COUNT = 50
 
 # --- Resolve company name or ticker to yfinance symbol ---
 _CRYPTO_MAP = {"BTC": "BTC-USD", "BITCOIN": "BTC-USD", "ETH": "ETH-USD", "ETHEREUM": "ETH-USD"}
@@ -82,6 +84,20 @@ def resolve_company_to_ticker(company):
     if re.match(r"^[A-Za-z0-9\.\-/=^]+$", s) and len(s) <= 20:
         return s_upper
     return None
+
+def _is_valid_ticker(ticker):
+    """
+    Lightweight validation: a valid ticker should return some price history.
+    This prevents running the rest of the pipeline for obviously-wrong inputs.
+    """
+    if not ticker:
+        return False
+    try:
+        t = yf.Ticker(ticker)
+        hist = t.history(period="5d", interval="1d")
+        return hist is not None and not hist.empty and len(hist) >= 1
+    except Exception:
+        return False
 
 def get_stock_chart_data(ticker, period="3mo"):
     try:
@@ -148,6 +164,70 @@ def _make_serializable(obj):
         return [_make_serializable(x) for x in obj]
     return obj
 
+
+def _dedup_sort_and_trim_news(items, limit=NEWS_LATEST_COUNT):
+    """
+    Deduplicate by URL (preferred) or (text,timestamp), then sort latest-first and trim.
+    """
+    if not items:
+        return []
+
+    deduped = []
+    seen = set()
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        url = (it.get("url") or "").strip()
+        text = (it.get("text") or "").strip()
+        ts = (it.get("timestamp") or "").strip()
+        if url:
+            key = ("u", url)
+        else:
+            key = ("t", text.lower(), ts)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(it)
+
+    deduped.sort(key=lambda x: parse_timestamp(x.get("timestamp")), reverse=True)
+    return deduped[: max(1, int(limit or 0))]
+
+
+def _sentiment_summary_from_trend(sentiment_trend_dict):
+    """
+    Option A: derive a 0–100 sentiment score from sentiment trend values (compound in [-1,1]).
+    Uses a simple recency weighting (newer buckets matter more).
+    """
+    if not isinstance(sentiment_trend_dict, dict) or not sentiment_trend_dict:
+        return {"verdict": "Neutral", "score": 50}
+
+    vals = []
+    for _, v in sentiment_trend_dict.items():
+        try:
+            vals.append(float(v))
+        except Exception:
+            pass
+
+    if not vals:
+        return {"verdict": "Neutral", "score": 50}
+
+    # Recency weighting: 1..n
+    n = len(vals)
+    weights = list(range(1, n + 1))
+    weighted_mean = sum(w * s for w, s in zip(weights, vals)) / max(1.0, float(sum(weights)))
+
+    score = int(round(50 + 50 * weighted_mean))
+    score = max(0, min(100, score))
+
+    if score >= 60:
+        verdict = "Positive"
+    elif score <= 40:
+        verdict = "Negative"
+    else:
+        verdict = "Neutral"
+
+    return {"verdict": verdict, "score": score}
+
 # --- API routes ---
 @app.route("/status", methods=["GET"])
 def api_status():
@@ -189,20 +269,33 @@ def api_scan():
         })
 
     ticker = resolve_company_to_ticker(company)
+    if not _is_valid_ticker(ticker):
+        return jsonify({
+            "news": news,
+            "wire_label": None,
+            "company": "",
+            "error": "Wrong Ticker/Name",
+            "sentiment": {},
+            "sentiment_summary": None,
+            "volume": {},
+            "spike": 1.0,
+            "insight": "",
+            "technical": None,
+            "fundamentals": None,
+            "resolved_ticker": None,
+            "stock_chart": None
+        })
     ticker_short = (ticker.replace(".NS", "").replace(".BO", "").split("-")[0]) if ticker else None
 
     company_news = []
     if company:
-        company_news = fetch_news_api(company, page_size=6) + fetch_google_news(company, page_size=6)
+        company_news = fetch_news_api(company, page_size=NEWS_LATEST_COUNT) + fetch_google_news(company, page_size=NEWS_LATEST_COUNT)
         if not company_news and ticker_short:
-            company_news = fetch_news_api(ticker_short, page_size=6) + fetch_google_news(ticker_short, page_size=6)
-    if company_news:
-        company_news.sort(key=lambda x: parse_timestamp(x["timestamp"]), reverse=True)
-        company_news = company_news[:6]
+            company_news = fetch_news_api(ticker_short, page_size=NEWS_LATEST_COUNT) + fetch_google_news(ticker_short, page_size=NEWS_LATEST_COUNT)
+    company_news = _dedup_sort_and_trim_news(company_news, limit=NEWS_LATEST_COUNT)
 
     technical = None
     fundamentals = None
-    sentiment_module = None
     if ticker:
         try:
             technical = run_indicator_module({"ticker": ticker}, timeframe_minutes=15)
@@ -210,10 +303,6 @@ def api_scan():
             pass
         try:
             fundamentals = run_trust_module({"ticker": ticker})
-        except Exception:
-            pass
-        try:
-            sentiment_module = run_sentiment_module(ticker, num_articles_per_query=10, max_age_hours=24)
         except Exception:
             pass
 
@@ -229,18 +318,31 @@ def api_scan():
             "insight": "",
             "technical": None,
             "fundamentals": None,
-            "sentiment_module": None,
             "resolved_ticker": None,
             "stock_chart": None
         })
 
     if company_news:
         sentiment, volume, source_sent, spike = process_signals(company_news)
-        insight = generate_insight(company or ticker_short or "", spike, source_sent, [d["text"] for d in company_news[:3]])
+        sentiment_summary = _sentiment_summary_from_trend(sentiment)
+        insight = generate_insight(
+            company or ticker_short or "",
+            spike,
+            source_sent,
+            [d["text"] for d in company_news[:3]],
+            technical=technical,
+        )
         display_news = company_news
     else:
-        sentiment, volume, source_sent, spike = {}, {}, {}, 1.0
-        insight = f"Technical and fundamental analysis for {ticker_short or ticker}. No news found for this query."
+        sentiment, volume, source_sent, spike = {}, {}, "neutral", 1.0
+        sentiment_summary = {"verdict": "Neutral", "score": 50}
+        insight = generate_insight(
+            company or ticker_short or ticker or "",
+            spike,
+            source_sent,
+            [],
+            technical=technical,
+        )
         display_news = news
 
     stock_chart = get_stock_chart_data(ticker) if ticker else None
@@ -250,17 +352,221 @@ def api_scan():
         "wire_label": (company or ticker_short or ticker) if company_news else None,
         "company": company or ticker_short or ticker or "",
         "sentiment": sentiment,
+        "sentiment_summary": sentiment_summary,
         "volume": volume,
         "spike": float(spike) if spike is not None else 1.0,
         "insight": insight,
         "technical": technical,
         "fundamentals": fundamentals,
-        "sentiment_module": sentiment_module,
         "resolved_ticker": ticker,
         "stock_chart": stock_chart,
         "error": None
     }
     return jsonify(_make_serializable(result))
+
+
+@app.route("/scan_stream", methods=["GET"])
+def api_scan_stream():
+    """
+    Server-Sent Events (SSE) scan endpoint.
+    Emits phase events as work completes so the frontend can show non-repeating progress.
+
+    Events:
+      - phase: {"phase": <key>, "status": "start"|"done"}
+      - still: {"phase": <key>, "message": "Still working"}
+      - result: <final JSON payload>
+      - error: {"message": "..."}
+    """
+    company = (request.args.get("company") or "").strip()
+
+    def sse(event, data_obj):
+        try:
+            payload = json.dumps(_make_serializable(data_obj), ensure_ascii=False)
+        except Exception:
+            payload = json.dumps({"message": "serialization_error"})
+        return f"event: {event}\ndata: {payload}\n\n"
+
+    @stream_with_context
+    def generate():
+        # Always send something quickly so the connection feels responsive.
+        yield sse("phase", {"phase": "stock", "status": "start"})
+
+        try:
+            news = get_safe_news()
+
+            if not company:
+                yield sse("phase", {"phase": "stock", "status": "done"})
+                yield sse("result", {"news": news, "wire_label": None, "company": "", "error": None})
+                return
+
+            # --- Phase: company resolution / stock ---
+            ticker = resolve_company_to_ticker(company)
+            if not _is_valid_ticker(ticker):
+                yield sse("phase", {"phase": "stock", "status": "done"})
+                yield sse(
+                    "result",
+                    {
+                        "news": news,
+                        "wire_label": None,
+                        "company": "",
+                        "error": "Wrong Ticker/Name",
+                        "sentiment": {},
+                        "sentiment_summary": None,
+                        "volume": {},
+                        "spike": 1.0,
+                        "insight": "",
+                        "technical": None,
+                        "fundamentals": None,
+                        "resolved_ticker": None,
+                        "stock_chart": None,
+                    },
+                )
+                return
+            ticker_short = (ticker.replace(".NS", "").replace(".BO", "").split("-")[0]) if ticker else None
+            yield sse("phase", {"phase": "stock", "status": "done"})
+
+            # --- Phase: news ---
+            yield sse("phase", {"phase": "news", "status": "start"})
+            company_news = []
+            if company:
+                company_news = fetch_news_api(company, page_size=NEWS_LATEST_COUNT) + fetch_google_news(company, page_size=NEWS_LATEST_COUNT)
+                if not company_news and ticker_short:
+                    company_news = fetch_news_api(ticker_short, page_size=NEWS_LATEST_COUNT) + fetch_google_news(ticker_short, page_size=NEWS_LATEST_COUNT)
+            company_news = _dedup_sort_and_trim_news(company_news, limit=NEWS_LATEST_COUNT)
+            yield sse("phase", {"phase": "news", "status": "done"})
+
+            # --- Phase: company details (placeholder for future enrichment) ---
+            yield sse("phase", {"phase": "company", "status": "start"})
+            yield sse("phase", {"phase": "company", "status": "done"})
+
+            technical = None
+            fundamentals = None
+
+            # --- Phase: technical indicators ---
+            yield sse("phase", {"phase": "ta", "status": "start"})
+            if ticker:
+                try:
+                    technical = run_indicator_module({"ticker": ticker}, timeframe_minutes=15)
+                except Exception:
+                    pass
+                try:
+                    fundamentals = run_trust_module({"ticker": ticker})
+                except Exception:
+                    pass
+            yield sse("phase", {"phase": "ta", "status": "done"})
+
+            if not ticker and not company_news:
+                yield sse(
+                    "result",
+                    {
+                        "news": news,
+                        "wire_label": None,
+                        "company": "",
+                        "error": "Could not resolve to a ticker or find news. Try a symbol (e.g. RELIANCE, TCS) or company name.",
+                        "sentiment": {},
+                        "volume": {},
+                        "spike": 1.0,
+                        "insight": "",
+                        "technical": None,
+                        "fundamentals": None,
+                        "resolved_ticker": None,
+                        "stock_chart": None,
+                    },
+                )
+                return
+
+            # --- Phase: AI insight (may take the longest) ---
+            yield sse("phase", {"phase": "ai", "status": "start"})
+
+            insight = ""
+            sentiment = {}
+            sentiment_summary = {"verdict": "Neutral", "score": 50}
+            volume = {}
+            source_sent = "neutral"
+            spike = 1.0
+            display_news = news
+
+            if company_news:
+                sentiment, volume, source_sent, spike = process_signals(company_news)
+                sentiment_summary = _sentiment_summary_from_trend(sentiment)
+                display_news = company_news
+                headlines = [d["text"] for d in company_news[:3]]
+                asset_name = company or ticker_short or ""
+            else:
+                headlines = []
+                asset_name = company or ticker_short or ticker or ""
+
+            # Run generate_insight in a background thread so we can emit "still working" ticks.
+            import threading
+            result_holder = {"insight": ""}
+            err_holder = {"err": None}
+
+            def _run():
+                try:
+                    result_holder["insight"] = generate_insight(
+                        asset_name,
+                        spike,
+                        source_sent,
+                        headlines,
+                        technical=technical,
+                    )
+                except Exception as ex:
+                    err_holder["err"] = str(ex)
+
+            th = threading.Thread(target=_run, daemon=True)
+            th.start()
+
+            # Emit gentle ticks while we wait.
+            import time
+            tick_messages = [
+                "Still working",
+                "Cross-checking signals",
+                "Synthesizing context",
+            ]
+            t0 = time.time()
+            tick_i = 0
+            while th.is_alive():
+                # first tick after a short delay, then periodic ticks
+                time.sleep(0.85 if (time.time() - t0) < 1.2 else 1.0)
+                yield sse("still", {"phase": "ai", "message": tick_messages[tick_i % len(tick_messages)]})
+                tick_i += 1
+
+            if err_holder["err"]:
+                yield sse("error", {"message": err_holder["err"]})
+                insight = ""
+            else:
+                insight = result_holder["insight"] or ""
+
+            yield sse("phase", {"phase": "ai", "status": "done"})
+
+            stock_chart = get_stock_chart_data(ticker) if ticker else None
+
+            yield sse(
+                "result",
+                {
+                    "news": display_news,
+                    "wire_label": (company or ticker_short or ticker) if company_news else None,
+                    "company": company or ticker_short or ticker or "",
+                    "sentiment": sentiment,
+                    "sentiment_summary": sentiment_summary,
+                    "volume": volume,
+                    "spike": float(spike) if spike is not None else 1.0,
+                    "insight": insight,
+                    "technical": technical,
+                    "fundamentals": fundamentals,
+                    "resolved_ticker": ticker,
+                    "stock_chart": stock_chart,
+                    "error": None,
+                },
+            )
+            return
+
+        except Exception as e:
+            yield sse("error", {"message": str(e)})
+            # Also send a result-like terminal event so the frontend can stop loading.
+            yield sse("result", {"news": get_safe_news(), "company": company or "", "error": str(e)})
+
+    return Response(generate(), mimetype="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", debug=True, port=5001)

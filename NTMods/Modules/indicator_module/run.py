@@ -74,30 +74,56 @@ def analyze_single_timeframe(ticker, interval):
             close = close.iloc[:, 0]
         close = close.squeeze()
 
-        # Compute indicators
-        rsi = ta.momentum.RSIIndicator(close).rsi()
+        # Compute indicators (most recent values only; keep output compact/serializable)
+        rsi_series = ta.momentum.RSIIndicator(close).rsi()
         macd = ta.trend.MACD(close)
         stoch = ta.momentum.StochRSIIndicator(close)
         bb = ta.volatility.BollingerBands(close)
 
+        rsi_last = float(rsi_series.iloc[-1]) if len(rsi_series) else None
+        macd_diff_last = float(macd.macd_diff().iloc[-1]) if len(close) else None  # histogram proxy
+        stoch_k_last = float(stoch.stochrsi_k().iloc[-1]) if len(close) else None
+
+        last_price = float(close.iloc[-1]) if len(close) else None
+
+        # Simple trend proxy: slope over recent window
+        w = min(20, len(close))
+        if w >= 3:
+            recent = close.iloc[-w:]
+            trend_pct = float(((recent.iloc[-1] / recent.iloc[0]) - 1.0) * 100.0)
+            recent_high = float(recent.max())
+            recent_low = float(recent.min())
+        else:
+            trend_pct = None
+            recent_high = None
+            recent_low = None
+
+        # Volatility proxy: Bollinger Band width as % of price
+        try:
+            bb_high = float(bb.bollinger_hband().iloc[-1])
+            bb_low = float(bb.bollinger_lband().iloc[-1])
+            bb_width_pct = float(((bb_high - bb_low) / last_price) * 100.0) if last_price else None
+        except Exception:
+            bb_width_pct = None
+
         buy, sell = 0, 0
 
         # RSI
-        if rsi.iloc[-1] < 30:
+        if rsi_last is not None and rsi_last < 30:
             buy += 1
-        elif rsi.iloc[-1] > 70:
+        elif rsi_last is not None and rsi_last > 70:
             sell += 1
 
         # MACD
-        if macd.macd_diff().iloc[-1] > 0:
+        if macd_diff_last is not None and macd_diff_last > 0:
             buy += 1
         else:
             sell += 1
 
         # StochRSI
-        if stoch.stochrsi_k().iloc[-1] < 0.2:
+        if stoch_k_last is not None and stoch_k_last < 0.2:
             buy += 1
-        elif stoch.stochrsi_k().iloc[-1] > 0.8:
+        elif stoch_k_last is not None and stoch_k_last > 0.8:
             sell += 1
 
         # Bollinger Bands
@@ -109,10 +135,28 @@ def analyze_single_timeframe(ticker, interval):
         confidence = round((abs(buy - sell) / 4) * 100, 1)
         signal = "BUY" if buy > sell else "SELL" if sell > buy else "HOLD"
 
+        # Normalize trend label
+        if trend_pct is None:
+            trend_label = "unknown"
+        elif trend_pct > 1.0:
+            trend_label = "up"
+        elif trend_pct < -1.0:
+            trend_label = "down"
+        else:
+            trend_label = "flat"
+
         return {
             "timeframe": interval,
             "signal": signal,
-            "confidence": confidence
+            "confidence": confidence,
+            "last_close": None if last_price is None else round(last_price, 2),
+            "rsi": None if rsi_last is None else round(rsi_last, 1),
+            "macd_diff": None if macd_diff_last is None else round(macd_diff_last, 4),
+            "trend": trend_label,
+            "trend_pct": None if trend_pct is None else round(trend_pct, 2),
+            "volatility": None if bb_width_pct is None else round(bb_width_pct, 2),
+            "range_high": None if recent_high is None else round(recent_high, 2),
+            "range_low": None if recent_low is None else round(recent_low, 2),
         }
 
     except Exception as e:

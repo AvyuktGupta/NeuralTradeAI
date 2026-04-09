@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 
 function CheckIcon() {
   return (
@@ -18,6 +18,9 @@ export default function LoadingSteps({
   steps = [],
   activeIndex = 0,
   completedCount = 0,
+  exiting = false,
+  detailByKey = {},
+  stillWorkingByKey = {},
 }) {
   const progressPct = useMemo(() => {
     const total = Math.max(1, steps.length)
@@ -25,8 +28,19 @@ export default function LoadingSteps({
     return Math.round((done / total) * 100)
   }, [steps.length, completedCount])
 
+  const [dots, setDots] = useState(1)
+
+  useEffect(() => {
+    const anyStillWorking = Object.values(stillWorkingByKey || {}).some(Boolean)
+    if (!anyStillWorking) return
+    const id = setInterval(() => {
+      setDots((d) => (d % 3) + 1)
+    }, 500)
+    return () => clearInterval(id)
+  }, [stillWorkingByKey])
+
   return (
-    <div className="ai-loading-overlay" role="status" aria-live="polite" aria-busy="true">
+    <div className={`ai-loading-overlay${exiting ? ' exiting' : ''}`} role="status" aria-live="polite" aria-busy="true">
       <div className="ai-loading-panel">
         <div className="ai-loading-top">
           <div className="ai-loading-title">{title}</div>
@@ -47,6 +61,8 @@ export default function LoadingSteps({
           {steps.map((s, i) => {
             const isDone = i < completedCount
             const isActive = i === activeIndex && !isDone
+            const detail = (detailByKey || {})[s.key]
+            const still = Boolean((stillWorkingByKey || {})[s.key])
             return (
               <div
                 key={s.key || i}
@@ -63,9 +79,19 @@ export default function LoadingSteps({
                   </div>
                   <div className="ai-step-text">
                     <span className="ai-step-icon" aria-hidden="true">{s.icon}</span>
-                    <span className="ai-step-label">{s.label}</span>
+                    <span className="ai-step-label">
+                      {s.label}
+                    </span>
                   </div>
                 </div>
+
+                {isActive && detail ? (
+                  <div className="ai-thinking">
+                    <span key={detail} className="ai-thinking-text">
+                      {detail}{still ? '.'.repeat(dots) : ''}
+                    </span>
+                  </div>
+                ) : null}
               </div>
             )
           })}

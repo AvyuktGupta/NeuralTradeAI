@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
-import { getNews, scan as apiScan } from '../services/api'
+import { getNews, scan as apiScan, scanStream } from '../services/api'
 import StockChart from '../components/StockChart'
 import SentimentCharts from '../components/SentimentCharts'
 import AboutModal from '../components/AboutModal'
 import LoadingSteps from '../components/LoadingSteps'
 import TypingEffect from '../components/TypingEffect'
+import Tooltip from '../components/Tooltip'
+import { INDICATOR_TOOLTIPS } from '../content/indicatorTooltips'
 
 const PERIOD_LABELS = { '1d': '1 Day', '1mo': '1 Month', '3mo': '3 Months', '1y': '1 Year' }
 const PERIOD_SHORT = { '1d': '1D', '1mo': '1M', '3mo': '3M', '1y': '1Y' }
@@ -55,6 +57,54 @@ function formatMetric(label, value) {
   return String(value)
 }
 
+function formatLevel(v) {
+  if (v == null) return '—'
+  const n = Number(v)
+  if (!Number.isFinite(n)) return '—'
+  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(n)
+}
+
+function normalizeInsightText(s) {
+  return String(s || '')
+    .replace(/[“”]/g, '"')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function splitSentences(text) {
+  const t = normalizeInsightText(text)
+  if (!t) return []
+  return t
+    .split(/(?<=[.!?])\s+(?=[A-Z0-9(])/)
+    .map((x) => x.trim())
+    .filter(Boolean)
+}
+
+function clampPct(n) {
+  const x = Number(n)
+  if (!Number.isFinite(x)) return 0
+  return Math.max(0, Math.min(100, x))
+}
+
+function confidenceMeta(pct) {
+  // Boundaries per spec: 0–40 Low, 40–70 Moderate, 70–100 High
+  if (pct < 40) return { level: 'low', label: 'Low Confidence' }
+  if (pct < 70) return { level: 'moderate', label: 'Moderate Confidence' }
+  return { level: 'high', label: 'High Confidence' }
+}
+
+function makeInsightSummary(fullInsight) {
+  const sentences = splitSentences(fullInsight)
+  if (!sentences.length) return ''
+
+  const picked = sentences.slice(0, 3).join(' ')
+  const maxChars = 260
+  if (picked.length <= maxChars) return picked
+
+  const shortened = picked.slice(0, maxChars).replace(/\s+\S*$/, '').trim()
+  return shortened ? `${shortened}…` : picked
+}
+
 function SearchIcon() {
   return (
     <svg className="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -73,10 +123,76 @@ function LogoIcon() {
   )
 }
 
+function SectionIcon({ kind }) {
+  if (kind === 'market') {
+    return (
+      <svg className="chapter-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M4 19V5" />
+        <path d="M4 19h16" />
+        <path d="M7 15l3-4 3 2 4-6" />
+      </svg>
+    )
+  }
+  if (kind === 'technical') {
+    return (
+      <svg className="chapter-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M4 8h6" />
+        <path d="M4 16h10" />
+        <path d="M14 8h6" />
+        <path d="M18 12v8" />
+        <path d="M10 4v8" />
+      </svg>
+    )
+  }
+  if (kind === 'fundamental') {
+    return (
+      <svg className="chapter-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M4 20V6a2 2 0 0 1 2-2h8l6 6v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z" />
+        <path d="M14 4v6h6" />
+        <path d="M8 14h8" />
+        <path d="M8 17h6" />
+      </svg>
+    )
+  }
+  // ai
+  return (
+    <svg className="chapter-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12 2v3" />
+      <path d="M12 19v3" />
+      <path d="M4 12H2" />
+      <path d="M22 12h-2" />
+      <path d="M7 7l-1.5-1.5" />
+      <path d="M18.5 18.5 17 17" />
+      <path d="M7 17l-1.5 1.5" />
+      <path d="M18.5 5.5 17 7" />
+      <path d="M12 7a5 5 0 1 0 5 5" />
+    </svg>
+  )
+}
+
+function ChapterDivider({ title, iconKind }) {
+  return (
+    <div className="chapter-divider" role="heading" aria-level={2}>
+      <SectionIcon kind={iconKind} />
+      <span className="chapter-title">{title}</span>
+    </div>
+  )
+}
+
 function ChevronIcon({ className }) {
   return (
     <svg className={className} width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <polyline points="6,9 12,15 18,9" />
+    </svg>
+  )
+}
+
+function InfoIcon() {
+  return (
+    <svg className="indicator-info-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="10" />
+      <line x1="12" y1="10" x2="12" y2="16" />
+      <circle cx="12" cy="7" r="1" fill="currentColor" stroke="none" />
     </svg>
   )
 }
@@ -101,11 +217,18 @@ export default function Dashboard() {
   const [newsExpanded, setNewsExpanded] = useState(false)
   const [activeStepIndex, setActiveStepIndex] = useState(0)
   const [completedSteps, setCompletedSteps] = useState(0)
+  const [showLoadingPanel, setShowLoadingPanel] = useState(false)
+  const [loadingExiting, setLoadingExiting] = useState(false)
+  const [insightEntered, setInsightEntered] = useState(false)
+  const [stepDetailByKey, setStepDetailByKey] = useState({})
+  const [stillWorkingByKey, setStillWorkingByKey] = useState({})
+  const [confidenceBarReady, setConfidenceBarReady] = useState(false)
 
   const mainRef = useRef(null)
   const searchRef = useRef(null)
   const resultsRef = useRef(null)
   const runIdRef = useRef(0)
+  const typingRunIdRef = useRef(0)
 
   // ── Initial news load ──
   const loadInitial = useCallback(async () => {
@@ -156,39 +279,107 @@ export default function Dashboard() {
       setNewsExpanded(false)
       setActiveStepIndex(0)
       setCompletedSteps(0)
+      setShowLoadingPanel(true)
+      setLoadingExiting(false)
+      setInsightEntered(false)
+      setStepDetailByKey({})
+      setStillWorkingByKey({})
 
-      const scanPromise = apiScan(q)
-
-      const runSteps = (async () => {
-        const lastIndex = AI_LOADING_STEPS.length - 1
-        for (let i = 0; i < AI_LOADING_STEPS.length; i++) {
-          if (runIdRef.current !== runId) return
-          setActiveStepIndex(i)
-
-          const ms = randInt(800, 1500) + (i === 0 ? 200 : 0)
-
-          // Don’t mark the final step complete until the backend scan is actually done.
-          if (i === lastIndex) {
-            await Promise.all([sleep(ms), scanPromise])
-          } else {
-            await sleep(ms)
-          }
-
-          if (runIdRef.current !== runId) return
-          setCompletedSteps(i + 1)
-        }
-      })()
+      const stepIndexByKey = AI_LOADING_STEPS.reduce((acc, s, idx) => {
+        acc[s.key] = idx
+        return acc
+      }, {})
 
       try {
-        const [data] = await Promise.all([scanPromise, runSteps])
+        let data = null
+
+        // Prefer streaming phases if supported.
+        if (typeof window !== 'undefined' && 'EventSource' in window) {
+          data = await new Promise((resolve, reject) => {
+            let cleanup = null
+
+            const safeCleanup = () => {
+              try { cleanup?.() } catch (_) {}
+              cleanup = null
+            }
+
+            cleanup = scanStream(q, {
+              onEvent: (evt) => {
+                if (runIdRef.current !== runId) {
+                  safeCleanup()
+                  return
+                }
+
+                if (evt.type === 'phase') {
+                  const idx = stepIndexByKey[evt.phase]
+                  if (idx != null) {
+                    if (evt.status === 'start') {
+                      setActiveStepIndex(idx)
+                    }
+                    if (evt.status === 'done') {
+                      setCompletedSteps((prev) => Math.max(prev, idx + 1))
+                    }
+                  }
+                  if (evt.phase === 'ai' && evt.status === 'start') {
+                    setStepDetailByKey((p) => ({ ...p, ai: 'Generating final insight' }))
+                    setStillWorkingByKey((p) => ({ ...p, ai: false }))
+                  }
+                  if (evt.phase === 'ta' && evt.status === 'start') {
+                    setStepDetailByKey((p) => ({ ...p, ta: 'Evaluating trend strength' }))
+                    setStillWorkingByKey((p) => ({ ...p, ta: false }))
+                  }
+                  if (evt.phase === 'news' && evt.status === 'start') {
+                    setStepDetailByKey((p) => ({ ...p, news: 'Interpreting market sentiment' }))
+                    setStillWorkingByKey((p) => ({ ...p, news: false }))
+                  }
+                  if (evt.phase === 'stock' && evt.status === 'start') {
+                    setStepDetailByKey((p) => ({ ...p, stock: 'Analyzing indicator correlations' }))
+                    setStillWorkingByKey((p) => ({ ...p, stock: false }))
+                  }
+                }
+
+                if (evt.type === 'still') {
+                  const phase = evt.phase
+                  if (phase) {
+                    setStepDetailByKey((p) => ({ ...p, [phase]: evt.message || 'Still working' }))
+                    setStillWorkingByKey((p) => ({ ...p, [phase]: true }))
+                  }
+                }
+
+                if (evt.type === 'result') {
+                  safeCleanup()
+                  resolve(evt.data)
+                }
+              },
+              onError: (errEvt) => {
+                safeCleanup()
+                reject(errEvt)
+              },
+            })
+          })
+        } else {
+          // Fallback (non-streaming).
+          data = await apiScan(q)
+        }
+
         if (runIdRef.current !== runId) return
         setCompany(data.company || q)
         setScanData(data)
         setError(data.error || null)
         if (data?.insight) {
           setAnalysisState(ANALYSIS_STATES.analyzing)
+          typingRunIdRef.current = runId
+          // Smooth handoff: fade out loader, then fade in AI insight.
+          setLoadingExiting(true)
+          setTimeout(() => {
+            if (runIdRef.current !== runId) return
+            setShowLoadingPanel(false)
+            setLoadingExiting(false)
+            setInsightEntered(true)
+          }, 360)
         } else {
           setAnalysisState(ANALYSIS_STATES.complete)
+          setShowLoadingPanel(false)
         }
       } catch (err) {
         if (runIdRef.current !== runId) return
@@ -196,6 +387,8 @@ export default function Dashboard() {
         setError(err.message || 'Scan failed')
         setScanData(null)
         setAnalysisState(ANALYSIS_STATES.idle)
+        setShowLoadingPanel(false)
+        setLoadingExiting(false)
       }
     },
     [query, setAnalysisState],
@@ -223,17 +416,29 @@ export default function Dashboard() {
   const resolvedTicker = scanData?.resolved_ticker || null
   const stockChart = scanData?.stock_chart || null
   const insight = scanData?.insight || ''
+  const insightSummary = useMemo(() => makeInsightSummary(insight), [insight])
   const technical = scanData?.technical || null
   const fundamentals = scanData?.fundamentals || null
-  const sentimentModule = scanData?.sentiment_module || null
   const sentiment = scanData?.sentiment || {}
+  const sentimentSummary = scanData?.sentiment_summary || null
   const volume = scanData?.volume || {}
   const spike = scanData?.spike != null ? scanData.spike : 1.0
+  const rangeHigh = technical?.details?.[0]?.range_high ?? null
+  const rangeLow = technical?.details?.[0]?.range_low ?? null
 
   const signal = technical?.signal || 'HOLD'
   const confidence = technical?.confidence || 0
+  const confidencePct = useMemo(() => clampPct(confidence), [confidence])
+  const confidenceInfo = useMemo(() => confidenceMeta(confidencePct), [confidencePct])
   const signalClass = signal === 'BUY' ? 'buy' : signal === 'SELL' ? 'sell' : 'hold'
   const hasSentimentData = Object.keys(sentiment).length > 0 || Object.keys(volume).length > 0
+
+  // Animate confidence bar fill on (re)load.
+  useEffect(() => {
+    setConfidenceBarReady(false)
+    const t = setTimeout(() => setConfidenceBarReady(true), 30)
+    return () => clearTimeout(t)
+  }, [confidencePct, company])
 
   const visibleNews = useMemo(() => {
     const all = displayNews || []
@@ -326,11 +531,26 @@ export default function Dashboard() {
                 steps={AI_LOADING_STEPS}
                 activeIndex={activeStepIndex}
                 completedCount={completedSteps}
+                exiting={loadingExiting}
+                detailByKey={stepDetailByKey}
+                stillWorkingByKey={stillWorkingByKey}
+              />
+            )}
+            {showLoadingPanel && analysisState !== ANALYSIS_STATES.loading && (
+              <LoadingSteps
+                title={`Analyzing ${query || 'your request'}…`}
+                subtitle="Gathering signals and context"
+                steps={AI_LOADING_STEPS}
+                activeIndex={activeStepIndex}
+                completedCount={completedSteps}
+                exiting={loadingExiting}
+                detailByKey={stepDetailByKey}
+                stillWorkingByKey={stillWorkingByKey}
               />
             )}
 
             {/* Results */}
-            {company && analysisState !== ANALYSIS_STATES.loading && (
+            {company && !error && analysisState !== ANALYSIS_STATES.loading && (
               <div className="results">
                 {resolvedTicker && (
                   <div className="ticker-badge">
@@ -338,65 +558,122 @@ export default function Dashboard() {
                   </div>
                 )}
 
-                {/* Decision Card */}
-                {technical && (
-                  <div className={`decision-card ${signalClass}`}>
-                    <div className="decision-left">
-                      <div className="decision-label">AI Decision</div>
-                      <div className={`decision-signal ${signalClass}`}>{signal}</div>
-                      <div className="decision-sub">
-                        Based on {INDICATORS_USED.length} technical indicators &middot;{' '}
-                        {technical.timeframe_minutes}m timeframe
+                {/* Brain Container: AI Decision + AI Insight */}
+                {(technical || (insightSummary && !showLoadingPanel)) && (
+                  <section className="brain-container" aria-label="AI Brain">
+                    {technical && (
+                      <div className={`decision-card ${signalClass}`}>
+                        <div className="decision-left">
+                          <div className="decision-label">AI Decision</div>
+                          <div className={`decision-signal ${signalClass}`}>{signal}</div>
+                          <div className="decision-sub">
+                            Based on {INDICATORS_USED.length} technical indicators &middot;{' '}
+                            {technical.timeframe_minutes}m timeframe
+                          </div>
+                        </div>
+                        <div className="decision-right">
+                          <div className="confidence-label">Confidence</div>
+                          <div className="confidence-value">
+                            {confidenceInfo.label} ({Math.round(confidencePct)}%)
+                          </div>
+                          <div className="confidence-bar">
+                            <div
+                              className={`confidence-fill level-${confidenceInfo.level}`}
+                              style={{ width: `${confidenceBarReady ? confidencePct : 0}%` }}
+                            />
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                    <div className="decision-right">
-                      <div className="confidence-label">Confidence</div>
-                      <div className="confidence-value">{confidence}%</div>
-                      <div className="confidence-bar">
-                        <div
-                          className={`confidence-fill ${signalClass}`}
-                          style={{ width: `${Math.min(100, confidence)}%` }}
-                        />
+                    )}
+
+                    {technical && insightSummary && !showLoadingPanel && <div className="brain-divider" />}
+
+                    {insightSummary && !showLoadingPanel && (
+                      <div className={`ai-insight-summary${insightEntered ? ' entered' : ''}`}>
+                        <div className="ai-insight-title">Detailed AI Breakdown</div>
+                        <div className="ai-insight-body">
+                          <TypingEffect
+                            text={insightSummary}
+                            start={analysisState === ANALYSIS_STATES.analyzing || analysisState === ANALYSIS_STATES.complete}
+                            onDone={() => {
+                              if (analysisState !== ANALYSIS_STATES.analyzing) return
+                              if (runIdRef.current !== typingRunIdRef.current) return
+                              setAnalysisState(ANALYSIS_STATES.complete)
+                            }}
+                            minDelayMs={6}
+                            maxDelayMs={14}
+                            initialDelayMs={120}
+                            className="ai-insight-typing"
+                          />
+                        </div>
+
+                        <div className="section-header">Market Scenarios</div>
+                        <div className="scenario-grid">
+                          <div className="scenario-card bullish">
+                            <div className="scenario-title">
+                              <span className="scenario-emoji" aria-hidden="true">📈</span>
+                              Bullish Scenario
+                            </div>
+                            <div className="scenario-body">
+                              Breakout above <span className="scenario-level">{formatLevel(rangeHigh)}</span> could trigger upward momentum.
+                            </div>
+                          </div>
+                          <div className="scenario-card bearish">
+                            <div className="scenario-title">
+                              <span className="scenario-emoji" aria-hidden="true">📉</span>
+                              Bearish Scenario
+                            </div>
+                            <div className="scenario-body">
+                              Breakdown below <span className="scenario-level">{formatLevel(rangeLow)}</span> may lead to further downside.
+                            </div>
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                  </div>
+                    )}
+                  </section>
                 )}
 
                 {/* Stats Strip */}
-                <div className="stats-strip">
-                  {fundamentals && (
-                    <div className="stat-card">
-                      <div className="stat-label">Trust Score</div>
-                      <div className="stat-value">
-                        {fundamentals.trust_score}
-                        <span style={{ fontSize: 14, color: 'var(--text-muted)', fontWeight: 400 }}>/100</span>
-                      </div>
-                      <div className="stat-sub" style={{ color: verdictColor(fundamentals.verdict) }}>
-                        {fundamentals.verdict}
+                {(fundamentals || sentimentSummary) && (
+                  <>
+                    <ChapterDivider title="FUNDAMENTAL HEALTH" iconKind="fundamental" />
+                    <div className="stats-strip">
+                      {fundamentals && (
+                        <div className="stat-card">
+                          <div className="stat-label">Trust Score</div>
+                          <div className="stat-value">
+                            {fundamentals.trust_score}
+                            <span style={{ fontSize: 14, color: 'var(--text-muted)', fontWeight: 400 }}>/100</span>
+                          </div>
+                          <div className="stat-sub" style={{ color: verdictColor(fundamentals.verdict) }}>
+                            {fundamentals.verdict}
+                          </div>
+                        </div>
+                      )}
+                      {sentimentSummary && (
+                        <div className="stat-card">
+                          <div className="stat-label">Sentiment</div>
+                          <div className="stat-value" style={{ color: sentimentColor(sentimentSummary.verdict) }}>
+                            {sentimentSummary.verdict}
+                          </div>
+                          <div className="stat-sub">Score: {sentimentSummary.score}/100</div>
+                        </div>
+                      )}
+                      <div className="stat-card">
+                        <div className="stat-label">Market Velocity</div>
+                        <div className="stat-value" style={{ color: spike > 1.5 ? 'var(--sell)' : 'var(--buy)' }}>
+                          {spike}x
+                        </div>
+                        <div className="stat-sub">{spike > 1.5 ? 'High activity detected' : 'Normal activity'}</div>
                       </div>
                     </div>
-                  )}
-                  {sentimentModule && (
-                    <div className="stat-card">
-                      <div className="stat-label">Sentiment</div>
-                      <div className="stat-value" style={{ color: sentimentColor(sentimentModule.verdict) }}>
-                        {sentimentModule.verdict}
-                      </div>
-                      <div className="stat-sub">Score: {sentimentModule.score}/100</div>
-                    </div>
-                  )}
-                  <div className="stat-card">
-                    <div className="stat-label">Market Velocity</div>
-                    <div className="stat-value" style={{ color: spike > 1.5 ? 'var(--sell)' : 'var(--buy)' }}>
-                      {spike}x
-                    </div>
-                    <div className="stat-sub">{spike > 1.5 ? 'High activity detected' : 'Normal activity'}</div>
-                  </div>
-                </div>
+                  </>
+                )}
 
                 {/* Price Chart */}
                 {stockChart && (
                   <div className="chart-section card">
+                    <ChapterDivider title="MARKET STRUCTURE" iconKind="market" />
                     <div className="chart-header">
                       <div className="chart-title">{company} &mdash; Price Chart</div>
                       <div className="period-group" role="group" aria-label="Chart timeline">
@@ -429,16 +706,23 @@ export default function Dashboard() {
                 {/* Technical Indicators */}
                 {technical && (
                   <>
-                    <div className="section-header">Technical Indicators</div>
+                    <ChapterDivider title="TECHNICAL SIGNALS" iconKind="technical" />
                     <div className="indicators-grid">
                       {INDICATORS_USED.map((name) => (
-                        <div key={name} className="indicator-card">
-                          <div className="indicator-name">{name}</div>
-                          <div className="indicator-status" style={{ color: signalColor(signal) }}>
-                            <span className="indicator-dot" style={{ background: signalColor(signal) }} />
-                            {signal === 'BUY' ? 'Bullish' : signal === 'SELL' ? 'Bearish' : 'Neutral'}
+                        <Tooltip key={name} content={INDICATOR_TOOLTIPS[name]} placement="right" className="indicator-tooltip">
+                          <div className="indicator-card" tabIndex={0}>
+                            <div className="indicator-name">
+                              <span className="indicator-name-text">{name}</span>
+                              <span className="indicator-info" aria-label={`${name} info`}>
+                                <InfoIcon />
+                              </span>
+                            </div>
+                            <div className="indicator-status" style={{ color: signalColor(signal) }}>
+                              <span className="indicator-dot" style={{ background: signalColor(signal) }} />
+                              {signal === 'BUY' ? 'Bullish' : signal === 'SELL' ? 'Bearish' : 'Neutral'}
+                            </div>
                           </div>
-                        </div>
+                        </Tooltip>
                       ))}
                     </div>
                   </>
@@ -447,7 +731,6 @@ export default function Dashboard() {
                 {/* Fundamental Metrics */}
                 {fundamentals?.metrics && Object.keys(fundamentals.metrics).length > 0 && (
                   <>
-                    <div className="section-header">Fundamental Metrics</div>
                     <div className="metrics-grid">
                       {Object.entries(fundamentals.metrics).map(([label, value]) => (
                         <div key={label} className="metric-item">
@@ -459,40 +742,16 @@ export default function Dashboard() {
                   </>
                 )}
 
-                {/* AI Analysis */}
-                {insight && (
-                  <>
-                    <div className="section-header">AI Analysis</div>
-                    <div className="ai-analysis card">
-                      <TypingEffect
-                        text={`“${insight}”`}
-                        start={analysisState === ANALYSIS_STATES.analyzing || analysisState === ANALYSIS_STATES.complete}
-                        minDelayMs={12}
-                        maxDelayMs={28}
-                        initialDelayMs={250}
-                        onDone={() => {
-                          setAnalysisState(ANALYSIS_STATES.complete)
-                        }}
-                      />
-                    </div>
-                  </>
-                )}
+                {/* (Removed duplicate AI insight card) */}
 
                 {/* Sentiment Charts */}
                 {hasSentimentData && (
                   <>
-                    <div className="section-header">Sentiment Trends</div>
                     <div className="charts-grid">
                       <div className="mini-chart-card">
                         <div className="mini-chart-title">Sentiment Trend</div>
                         <div className="mini-chart-body">
                           <SentimentCharts sentiment={sentiment} volume={volume} type="sentiment" />
-                        </div>
-                      </div>
-                      <div className="mini-chart-card">
-                        <div className="mini-chart-title">Volume Pressure</div>
-                        <div className="mini-chart-body">
-                          <SentimentCharts sentiment={sentiment} volume={volume} type="volume" />
                         </div>
                       </div>
                     </div>

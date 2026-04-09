@@ -10,6 +10,26 @@ load_dotenv()
 load_dotenv(_load_env)
 NEWS_API_KEY = os.getenv("NEWS_API_KEY")
 
+def _join_text_parts(*parts, max_chars=4000):
+    """
+    Join non-empty text parts into one analysis string.
+    Keep it reasonably bounded so we don't send huge payloads downstream.
+    """
+    cleaned = []
+    for p in parts:
+        s = (p or "")
+        try:
+            s = str(s)
+        except Exception:
+            continue
+        s = " ".join(s.split()).strip()
+        if s:
+            cleaned.append(s)
+    text = "\n".join(cleaned).strip()
+    if max_chars and len(text) > max_chars:
+        text = text[:max_chars].rsplit(" ", 1)[0].strip()
+    return text
+
 def fetch_news_api(company, page_size=5):
     """Fetch news from NewsAPI.org"""
     if not NEWS_API_KEY:
@@ -35,8 +55,15 @@ def fetch_news_api(company, page_size=5):
         articles = data.get("articles", [])
         results = []
         for article in articles:
+            # Prefer "whole article" text when available: title + description + content.
+            # NewsAPI often provides a truncated "content" field; still better than title only.
+            full_text = _join_text_parts(
+                article.get("title"),
+                article.get("description"),
+                article.get("content"),
+            )
             results.append({
-                "text": article["title"],
+                "text": full_text or (article.get("title") or ""),
                 "timestamp": article["publishedAt"],
                 "source": article["source"]["name"],
                 "url": article.get("url") or ""
@@ -64,8 +91,19 @@ def fetch_google_news(company, page_size=5):
         results = []
         for item in items:
             link_el = item.find("link")
+            desc_el = item.find("description")
+            # Google News RSS descriptions often contain HTML; strip to plain text.
+            desc_text = ""
+            try:
+                if desc_el and desc_el.text:
+                    desc_text = BeautifulSoup(desc_el.text, "html.parser").get_text(" ", strip=True)
+            except Exception:
+                desc_text = desc_el.text if desc_el else ""
+
+            title_text = item.title.text if item.title else ""
+            full_text = _join_text_parts(title_text, desc_text)
             results.append({
-                "text": item.title.text,
+                "text": full_text or title_text,
                 "timestamp": item.pubDate.text,
                 "source": "Google News",
                 "url": link_el.get_text(strip=True) if link_el else ""

@@ -12,6 +12,27 @@ const BACKEND_URL = (process.env.BACKEND_URL || 'http://127.0.0.1:5001').replace
 
 app.use(express.json());
 
+/** Stream SSE endpoint (do not buffer). */
+app.get('/api/scan_stream', async (req, res, next) => {
+  const url = `${BACKEND_URL}/scan_stream?${new URLSearchParams(req.query)}`;
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: { ...req.headers, host: undefined, accept: 'text/event-stream' },
+    });
+
+    res.status(response.status);
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+
+    if (!response.body) return res.end();
+    response.body.pipe(res);
+  } catch (err) {
+    next(err);
+  }
+});
+
 /** Proxy /api/* to Python backend (e.g. /api/status -> /status, /api/scan -> /scan) */
 app.use('/api', async (req, res, next) => {
   const backendPath = req.url || '/';

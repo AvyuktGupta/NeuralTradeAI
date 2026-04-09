@@ -43,15 +43,19 @@ def process_signals(raw_data):
     df["sentiment"] = df["text"].apply(lambda x: analyzer.polarity_scores(str(x))["compound"])
 
     # 3. Standardize Time (CRITICAL STEP)
-    df["timestamp"] = df["timestamp"].apply(normalize_dates)
-    
+    # Convert to timezone-aware UTC, then convert to Indian Standard Time (IST, +05:30)
+    # NOTE: we intentionally bucket in IST so the chart labels match the UI requirement.
+    ts_utc = pd.to_datetime(df["timestamp"].apply(normalize_dates), utc=True, errors="coerce")
+    ts_utc = ts_utc.fillna(pd.Timestamp.now(tz="UTC"))
+    ts_ist = ts_utc.dt.tz_convert("Asia/Kolkata")
+
     # Floor timestamps to the nearest hour for aggregation (e.g., 10:14 -> 10:00)
-    df["hour"] = df["timestamp"].dt.floor('h')
+    df["hour_ist"] = ts_ist.dt.floor("h")
 
     # 4. Aggregate Data (The "Signal" Creation)
     #   - Sentiment: Average mood per hour
     #   - Volume: Count of articles per hour (Velocity)
-    hourly_groups = df.groupby("hour")
+    hourly_groups = df.groupby("hour_ist")
     
     sentiment_trend = hourly_groups["sentiment"].mean()
     volume_trend = hourly_groups["text"].count()
@@ -71,9 +75,11 @@ def process_signals(raw_data):
         spike_ratio = 1.0
 
     # 7. Convert to Python dicts for the Frontend (JSON serialization)
-    # Convert timestamps to string strings for Chart.js
-    sentiment_dict = {k.strftime('%H:%M'): v for k, v in sentiment_trend.items()}
-    volume_dict = {k.strftime('%H:%M'): v for k, v in volume_trend.items()}
+    # Convert timestamps to strings for Chart.js in IST, 12-hour format:
+    # DD-MM-YYYY HH:00 AM/PM (example: 09-04-2026 03:00 PM)
+    label_fmt = "%d-%m-%Y %I:00 %p"
+    sentiment_dict = {k.strftime(label_fmt): v for k, v in sentiment_trend.items()}
+    volume_dict = {k.strftime(label_fmt): v for k, v in volume_trend.items()}
 
     return sentiment_dict, volume_dict, source_sentiment, spike_ratio
 

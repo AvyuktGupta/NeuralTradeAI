@@ -43,3 +43,52 @@ export async function scan(company) {
     body: JSON.stringify({ company: company.trim() }),
   });
 }
+
+/**
+ * Streaming scan using SSE.
+ * Emits:
+ *  - { type: 'phase', phase, status }
+ *  - { type: 'still', phase, message }
+ *  - { type: 'error', message }
+ *  - { type: 'result', data }
+ */
+export function scanStream(company, { onEvent, onError } = {}) {
+  const q = (company || '').trim()
+  const params = new URLSearchParams({ company: q })
+  const es = new EventSource(`/api/scan_stream?${params}`)
+
+  const emit = (evt) => {
+    try {
+      onEvent?.(evt)
+    } catch (_) {}
+  }
+
+  es.addEventListener('phase', (e) => {
+    try {
+      const data = JSON.parse(e.data)
+      emit({ type: 'phase', ...data })
+    } catch (_) {}
+  })
+
+  es.addEventListener('still', (e) => {
+    try {
+      const data = JSON.parse(e.data)
+      emit({ type: 'still', ...data })
+    } catch (_) {}
+  })
+
+  es.addEventListener('error', (e) => {
+    // EventSource 'error' is not always JSON; treat as transport error.
+    onError?.(e)
+  })
+
+  es.addEventListener('result', (e) => {
+    try {
+      const data = JSON.parse(e.data)
+      emit({ type: 'result', data })
+    } catch (_) {}
+    es.close()
+  })
+
+  return () => es.close()
+}
