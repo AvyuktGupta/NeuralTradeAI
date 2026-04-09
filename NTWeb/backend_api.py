@@ -83,28 +83,6 @@ def resolve_company_to_ticker(company):
         return s_upper
     return None
 
-def get_market_data():
-    tickers = {"NIFTY 50": "^NSEI", "SENSEX": "^BSESN", "GOLD": "GC=F", "USD/INR": "INR=X", "BITCOIN": "BTC-USD"}
-    data = []
-    try:
-        for name, symbol in tickers.items():
-            t = yf.Ticker(symbol)
-            try:
-                price = t.fast_info.last_price
-                prev = t.fast_info.previous_close
-                change = price - prev
-                data.append({
-                    "name": name,
-                    "price": f"{price:,.2f}",
-                    "change": f"{change:+.2f} ({(change/prev)*100:+.2f}%)",
-                    "color": "text-emerald-400" if change >= 0 else "text-red-400"
-                })
-            except:
-                continue
-    except:
-        pass
-    return data
-
 def get_stock_chart_data(ticker, period="3mo"):
     try:
         t = yf.Ticker(ticker)
@@ -131,24 +109,6 @@ def get_stock_chart_data(ticker, period="3mo"):
         return {"labels": dates, "prices": prices}
     except Exception:
         return None
-
-def get_top_movers():
-    watchlist = ["RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS", "TATAMOTORS.NS"]
-    movers = []
-    for symbol in watchlist:
-        try:
-            t = yf.Ticker(symbol)
-            price = t.fast_info.last_price
-            change_pct = ((price - t.fast_info.previous_close) / t.fast_info.previous_close) * 100
-            movers.append({
-                "symbol": symbol.replace(".NS", ""),
-                "price": f"₹{price:,.2f}",
-                "pct_str": f"{change_pct:+.2f}%",
-                "color": "text-emerald-400" if change_pct >= 0 else "text-red-400"
-            })
-        except:
-            continue
-    return movers
 
 def get_safe_news():
     news = []
@@ -195,14 +155,6 @@ def api_status():
     return jsonify({"modules_loaded": MODULES_LOADED})
 
 
-@app.route("/market", methods=["GET"])
-def api_market():
-    return jsonify(get_market_data())
-
-@app.route("/movers", methods=["GET"])
-def api_movers():
-    return jsonify(get_top_movers())
-
 @app.route("/news", methods=["GET"])
 def api_news():
     return jsonify(get_safe_news())
@@ -226,14 +178,10 @@ def api_scan():
     body = request.get_json(silent=True) or {}
     company = (body.get("company") or request.form.get("company") or "").strip()
 
-    market = get_market_data()
-    movers = get_top_movers()
     news = get_safe_news()
 
     if not company:
         return jsonify({
-            "market": market,
-            "movers": movers,
             "news": news,
             "wire_label": None,
             "company": "",
@@ -271,8 +219,6 @@ def api_scan():
 
     if not ticker and not company_news:
         return jsonify({
-            "market": market,
-            "movers": movers,
             "news": news,
             "wire_label": None,
             "company": "",
@@ -300,8 +246,6 @@ def api_scan():
     stock_chart = get_stock_chart_data(ticker) if ticker else None
 
     result = {
-        "market": market,
-        "movers": movers,
         "news": display_news,
         "wire_label": (company or ticker_short or ticker) if company_news else None,
         "company": company or ticker_short or ticker or "",

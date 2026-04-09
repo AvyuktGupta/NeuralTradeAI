@@ -28,14 +28,6 @@ export async function getStatus() {
   return request('/api/status');
 }
 
-export async function getMarket() {
-  return request('/api/market');
-}
-
-export async function getMovers() {
-  return request('/api/movers');
-}
-
 export async function getNews() {
   return request('/api/news');
 }

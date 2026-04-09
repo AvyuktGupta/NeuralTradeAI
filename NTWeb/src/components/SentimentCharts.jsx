@@ -18,9 +18,22 @@ function SentimentCharts({ sentiment = {}, volume = {}, type }) {
     const ctx = el.getContext('2d')
     if (chartRef.current) chartRef.current.destroy()
 
+    const tooltipConfig = {
+      backgroundColor: '#161b22',
+      borderColor: 'rgba(48, 54, 61, 0.8)',
+      borderWidth: 1,
+      titleColor: '#8b949e',
+      bodyColor: '#e6edf3',
+      titleFont: { family: 'Inter', size: 11 },
+      bodyFont: { family: 'Inter', size: 12, weight: 600 },
+      padding: 8,
+      cornerRadius: 6,
+      displayColors: false,
+    }
+
     const commonOptions = {
       maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
+      plugins: { legend: { display: false }, tooltip: tooltipConfig },
       scales: {
         x: { display: false },
         y: { display: false, grid: { display: false } },
@@ -30,8 +43,8 @@ function SentimentCharts({ sentiment = {}, volume = {}, type }) {
 
     if (type === 'sentiment') {
       const gradient = ctx.createLinearGradient(0, 0, 0, 200)
-      gradient.addColorStop(0, 'rgba(251, 191, 36, 0.4)')
-      gradient.addColorStop(1, 'rgba(251, 191, 36, 0)')
+      gradient.addColorStop(0, 'rgba(210, 153, 34, 0.25)')
+      gradient.addColorStop(1, 'rgba(210, 153, 34, 0)')
       chartRef.current = new Chart(ctx, {
         type: 'line',
         data: {
@@ -40,12 +53,14 @@ function SentimentCharts({ sentiment = {}, volume = {}, type }) {
             {
               label: 'Sentiment Score',
               data: sentimentValues,
-              borderColor: '#fbbf24',
+              borderColor: '#d29922',
               backgroundColor: gradient,
+              borderWidth: 1.5,
               fill: true,
               tension: 0.4,
               pointRadius: 0,
-              pointHoverRadius: 5,
+              pointHoverRadius: 4,
+              pointHoverBackgroundColor: '#d29922',
             },
           ],
         },
@@ -60,9 +75,9 @@ function SentimentCharts({ sentiment = {}, volume = {}, type }) {
             {
               label: 'Msg Volume',
               data: volumeValues,
-              backgroundColor: '#3b82f6',
-              borderRadius: 2,
-              hoverBackgroundColor: '#60a5fa',
+              backgroundColor: 'rgba(47, 129, 247, 0.6)',
+              borderRadius: 3,
+              hoverBackgroundColor: '#2f81f7',
             },
           ],
         },
@@ -78,7 +93,13 @@ function SentimentCharts({ sentiment = {}, volume = {}, type }) {
     }
   }, [JSON.stringify(labels), JSON.stringify(sentimentValues), JSON.stringify(volumeValues), type])
 
-  return <canvas ref={canvasRef} style={{ width: '100%', height: '100%' }} aria-label={type === 'sentiment' ? 'Sentiment trend' : 'Volume pressure'} />
+  return (
+    <canvas
+      ref={canvasRef}
+      style={{ width: '100%', height: '100%' }}
+      aria-label={type === 'sentiment' ? 'Sentiment trend' : 'Volume pressure'}
+    />
+  )
 }
 
 export default memo(SentimentCharts)

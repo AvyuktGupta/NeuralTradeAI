@@ -1,32 +1,116 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react'
-import {
-  getMarket,
-  getMovers,
-  getNews,
-  getChart,
-  scan as apiScan,
-} from '../services/api'
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { getNews, scan as apiScan } from '../services/api'
 import StockChart from '../components/StockChart'
 import SentimentCharts from '../components/SentimentCharts'
+import AboutModal from '../components/AboutModal'
+import LoadingSteps from '../components/LoadingSteps'
+import TypingEffect from '../components/TypingEffect'
 
 const PERIOD_LABELS = { '1d': '1 Day', '1mo': '1 Month', '3mo': '3 Months', '1y': '1 Year' }
+const PERIOD_SHORT = { '1d': '1D', '1mo': '1M', '3mo': '3M', '1y': '1Y' }
+const INDICATORS_USED = ['RSI', 'MACD', 'StochRSI', 'Bollinger Bands']
+const NEWS_INITIAL_COUNT = 4
+
+const AI_LOADING_STEPS = [
+  { key: 'stock', icon: '📊', label: 'Fetching stock data...' },
+  { key: 'news', icon: '📰', label: 'Fetching latest news...' },
+  { key: 'company', icon: '🏢', label: 'Fetching company details...' },
+  { key: 'ta', icon: '⚙️', label: 'Analyzing technical indicators...' },
+  { key: 'ai', icon: '🤖', label: 'Generating AI insights...' },
+]
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms))
+}
+
+function randInt(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min
+}
+
+function signalColor(s) {
+  if (s === 'BUY') return 'var(--buy)'
+  if (s === 'SELL') return 'var(--sell)'
+  return 'var(--hold)'
+}
+
+function verdictColor(v) {
+  if (!v) return 'var(--hold)'
+  if (v.includes('Strong') || v.includes('Legit')) return 'var(--buy)'
+  if (v.includes('Risky') || v.includes('Suspicious')) return 'var(--sell)'
+  return 'var(--hold)'
+}
+
+function sentimentColor(v) {
+  if (v === 'Positive') return 'var(--buy)'
+  if (v === 'Negative') return 'var(--sell)'
+  return 'var(--hold)'
+}
+
+function formatMetric(label, value) {
+  if (value == null) return '—'
+  if (typeof value === 'number') {
+    const formatted = value.toFixed(2)
+    return label.includes('%') ? `${formatted}%` : formatted
+  }
+  return String(value)
+}
+
+function SearchIcon() {
+  return (
+    <svg className="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="11" cy="11" r="8" />
+      <line x1="21" y1="21" x2="16.65" y2="16.65" />
+    </svg>
+  )
+}
+
+function LogoIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="22,7 13.5,15.5 8.5,10.5 2,17" />
+      <polyline points="16,7 22,7 22,13" />
+    </svg>
+  )
+}
+
+function ChevronIcon({ className }) {
+  return (
+    <svg className={className} width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="6,9 12,15 18,9" />
+    </svg>
+  )
+}
+
+const ANALYSIS_STATES = {
+  idle: 'idle',
+  loading: 'loading',
+  analyzing: 'analyzing',
+  complete: 'complete',
+}
 
 export default function Dashboard() {
-  const [market, setMarket] = useState([])
-  const [movers, setMovers] = useState([])
   const [news, setNews] = useState([])
   const [company, setCompany] = useState('')
   const [query, setQuery] = useState('')
-  const [loading, setLoading] = useState(false)
+  const [analysisState, setAnalysisState] = useState(ANALYSIS_STATES.idle)
   const [error, setError] = useState(null)
   const [scanData, setScanData] = useState(null)
   const [chartPeriod, setChartPeriod] = useState('3mo')
+  const [showAbout, setShowAbout] = useState(false)
+  const [navScrolled, setNavScrolled] = useState(false)
+  const [newsExpanded, setNewsExpanded] = useState(false)
+  const [activeStepIndex, setActiveStepIndex] = useState(0)
+  const [completedSteps, setCompletedSteps] = useState(0)
 
+  const mainRef = useRef(null)
+  const searchRef = useRef(null)
+  const resultsRef = useRef(null)
+  const runIdRef = useRef(0)
+
+  // ── Initial news load ──
   const loadInitial = useCallback(async () => {
     try {
-      const [m, mov, n] = await Promise.all([getMarket(), getMovers(), getNews()])
-      setMarket(m)
-      setMovers(mov)
+      const n = await getNews()
       setNews(n)
     } catch (e) {
       setError(e.message || 'Failed to load initial data')
@@ -37,33 +121,104 @@ export default function Dashboard() {
     loadInitial()
   }, [loadInitial])
 
+  // ── Navbar blur on scroll ──
+  useEffect(() => {
+    const el = mainRef.current
+    if (!el) return
+    const handler = () => setNavScrolled(el.scrollTop > 20)
+    el.addEventListener('scroll', handler, { passive: true })
+    return () => el.removeEventListener('scroll', handler)
+  }, [])
+
+  const isBusy = analysisState === ANALYSIS_STATES.loading || analysisState === ANALYSIS_STATES.analyzing
+
+  // ── Scroll to results on analyze start ──
+  useEffect(() => {
+    if ((analysisState === ANALYSIS_STATES.loading || analysisState === ANALYSIS_STATES.analyzing) && resultsRef.current) {
+      setTimeout(() => {
+        resultsRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      }, 150)
+    }
+  }, [analysisState])
+
+  // ── Form submit ──
   const handleSubmit = useCallback(
     async (e) => {
       e.preventDefault()
       const q = (query || '').trim()
       if (!q) return
-      setLoading(true)
+      const runId = ++runIdRef.current
+
+      setAnalysisState(ANALYSIS_STATES.loading)
       setError(null)
       setScanData(null)
+      setCompany('')
+      setNewsExpanded(false)
+      setActiveStepIndex(0)
+      setCompletedSteps(0)
+
+      const scanPromise = apiScan(q)
+
+      const runSteps = (async () => {
+        const lastIndex = AI_LOADING_STEPS.length - 1
+        for (let i = 0; i < AI_LOADING_STEPS.length; i++) {
+          if (runIdRef.current !== runId) return
+          setActiveStepIndex(i)
+
+          const ms = randInt(800, 1500) + (i === 0 ? 200 : 0)
+
+          // Don’t mark the final step complete until the backend scan is actually done.
+          if (i === lastIndex) {
+            await Promise.all([sleep(ms), scanPromise])
+          } else {
+            await sleep(ms)
+          }
+
+          if (runIdRef.current !== runId) return
+          setCompletedSteps(i + 1)
+        }
+      })()
+
       try {
-        const data = await apiScan(q)
+        const [data] = await Promise.all([scanPromise, runSteps])
+        if (runIdRef.current !== runId) return
         setCompany(data.company || q)
         setScanData(data)
         setError(data.error || null)
+        if (data?.insight) {
+          setAnalysisState(ANALYSIS_STATES.analyzing)
+        } else {
+          setAnalysisState(ANALYSIS_STATES.complete)
+        }
       } catch (err) {
+        if (runIdRef.current !== runId) return
+        runIdRef.current++ // cancel any in-flight step simulation
         setError(err.message || 'Scan failed')
         setScanData(null)
-      } finally {
-        setLoading(false)
+        setAnalysisState(ANALYSIS_STATES.idle)
       }
     },
-    [query]
+    [query, setAnalysisState],
   )
 
+  // ── Nav actions ──
+  const scrollToTop = useCallback(() => {
+    mainRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
+  }, [])
+
+  const scrollToSearch = useCallback(() => {
+    searchRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    setTimeout(() => {
+      searchRef.current?.querySelector('input')?.focus()
+    }, 500)
+  }, [])
+
+  // ── Derived state ──
   const displayNews = useMemo(
-    () => (scanData && scanData.news && scanData.news.length) ? scanData.news : news,
-    [scanData, news]
+    () => (scanData?.news?.length ? scanData.news : news),
+    [scanData, news],
   )
+
   const wireLabel = scanData?.wire_label || null
   const resolvedTicker = scanData?.resolved_ticker || null
   const stockChart = scanData?.stock_chart || null
@@ -75,233 +230,329 @@ export default function Dashboard() {
   const volume = scanData?.volume || {}
   const spike = scanData?.spike != null ? scanData.spike : 1.0
 
+  const signal = technical?.signal || 'HOLD'
+  const confidence = technical?.confidence || 0
+  const signalClass = signal === 'BUY' ? 'buy' : signal === 'SELL' ? 'sell' : 'hold'
+  const hasSentimentData = Object.keys(sentiment).length > 0 || Object.keys(volume).length > 0
+
+  const visibleNews = useMemo(() => {
+    const all = displayNews || []
+    return newsExpanded ? all : all.slice(0, NEWS_INITIAL_COUNT)
+  }, [displayNews, newsExpanded])
+
+  const hasMoreNews = (displayNews || []).length > NEWS_INITIAL_COUNT
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
-      <nav className="glass-panel" style={{ zIndex: 50, height: 64, flexShrink: 0 }}>
-        <div style={{ maxWidth: 1280, margin: '0 auto', padding: '0 24px', height: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <div style={{ width: 32, height: 32, background: '#2563eb', borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700 }}>N</div>
-            <h1 style={{ fontSize: '1.25rem', fontWeight: 700, color: '#fff' }}>Neural<span className="text-gold">Trade</span></h1>
+    <div className="app-layout">
+      {/* ── Navbar ── */}
+      <nav className={`navbar${navScrolled ? ' scrolled' : ''}`}>
+        <div className="navbar-inner">
+          <div className="logo" onClick={scrollToTop} role="button" tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && scrollToTop()}>
+            <div className="logo-icon">
+              <LogoIcon />
+            </div>
+            <span className="logo-text">AI Stock <span>Analyzer</span></span>
+          </div>
+          <div className="nav-links">
+            <span className="nav-link active" onClick={scrollToTop}>Dashboard</span>
+            <span className="nav-link" onClick={scrollToSearch}>Analyze</span>
+            <span className="nav-link" onClick={() => setShowAbout(true)}>About</span>
           </div>
         </div>
       </nav>
 
-      <div style={{ flex: 1, overflow: 'hidden', display: 'flex', padding: 24, gap: 24, maxWidth: 1280, margin: '0 auto', width: '100%' }}>
-        <div style={{ flex: '0 0 75%', display: 'flex', flexDirection: 'column', gap: 24, overflowY: 'auto', paddingRight: 8 }} className="scrollbar-hide">
-          <div className="glass-panel" style={{ padding: 24, borderRadius: 12 }}>
-            <form onSubmit={handleSubmit} style={{ display: 'flex', gap: 16 }}>
-              <input
-                type="text"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search Ticker (e.g. RELIANCE, BTC)..."
-                required
-                style={{ flex: 1, background: 'rgba(15, 23, 42, 0.5)', color: '#fff', padding: '12px 16px', border: '1px solid #475569', borderRadius: 8, outline: 'none' }}
-              />
-              <button type="submit" disabled={loading} style={{ background: '#2563eb', color: '#fff', fontWeight: 700, padding: '12px 32px', borderRadius: 8, border: 'none', cursor: loading ? 'wait' : 'pointer' }}>
-                {loading ? '...' : 'SCAN'}
+      {/* ── Main ── */}
+      <main className="main-content" ref={mainRef}>
+        <div className="container">
+          {/* Hero Section */}
+          <section className="hero">
+            <div className="hero-glow-wrap">
+              <div className="hero-glow" />
+              <svg
+                className="hero-chart-icon"
+                width="56"
+                height="56"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <polyline points="22,7 13.5,15.5 8.5,10.5 2,17" />
+                <polyline points="16,7 22,7 22,13" />
+              </svg>
+            </div>
+            <h1 className="hero-title">AI-Powered Stock Intelligence</h1>
+            <p className="hero-subtitle">
+              Analyze stocks using technical indicators, market trends, and AI-driven insights
+            </p>
+          </section>
+
+          {/* Search */}
+          <section className="search-section" ref={searchRef}>
+            <form onSubmit={handleSubmit} className="search-form">
+              <div className="search-input-wrap">
+                <SearchIcon />
+                <input
+                  type="text"
+                  className="search-input"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Enter ticker symbol (e.g. RELIANCE, TCS, BTC)..."
+                  required
+                />
+              </div>
+              <button type="submit" className="analyze-btn" disabled={isBusy}>
+                {isBusy ? (
+                  <>
+                    <div className="spinner" />
+                    Analyzing...
+                  </>
+                ) : (
+                  'Analyze'
+                )}
               </button>
             </form>
-            {error && <p style={{ color: '#f87171', fontSize: 12, marginTop: 12 }}>⚠️ {error}</p>}
-          </div>
+            {error && <div className="error-msg">{error}</div>}
+          </section>
 
-          {company && (
-            <>
-              {resolvedTicker && (
-                <p style={{ color: '#94a3b8', fontSize: 12 }}>Resolved ticker: <span className="text-gold" style={{ fontFamily: 'monospace' }}>{resolvedTicker}</span> (used for Technical & Fundamentals)</p>
-              )}
-              {stockChart && (
-                <div className="glass-panel" style={{ padding: 24, borderRadius: 12, borderLeft: '4px solid #22d3ee' }}>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
-                    <h3 style={{ color: '#22d3ee', fontSize: 12, fontWeight: 700, textTransform: 'uppercase' }}>📈 {company} — Price Chart</h3>
-                    <div style={{ display: 'flex', gap: 4 }} role="group" aria-label="Chart timeline">
-                      {['1d', '1mo', '3mo', '1y'].map((p) => (
-                        <button
-                          key={p}
-                          type="button"
-                          onClick={() => setChartPeriod(p)}
-                          style={{
-                            padding: '6px 12px',
-                            borderRadius: 4,
-                            fontSize: 12,
-                            fontWeight: 700,
-                            border: `1px solid ${chartPeriod === p ? '#22d3ee' : '#475569'}`,
-                            background: chartPeriod === p ? '#0891b2' : '#334155',
-                            color: chartPeriod === p ? '#fff' : '#cbd5e1',
-                            cursor: 'pointer',
-                          }}
-                        >
-                          {p === '1d' ? '1D' : p === '1mo' ? '1M' : p === '3mo' ? '3M' : '1Y'}
-                        </button>
-                      ))}
+          {/* Loading / Results */}
+          <div ref={resultsRef}>
+            {analysisState === ANALYSIS_STATES.loading && (
+              <LoadingSteps
+                title={`Analyzing ${query || 'your request'}…`}
+                subtitle="Gathering signals and context"
+                steps={AI_LOADING_STEPS}
+                activeIndex={activeStepIndex}
+                completedCount={completedSteps}
+              />
+            )}
+
+            {/* Results */}
+            {company && analysisState !== ANALYSIS_STATES.loading && (
+              <div className="results">
+                {resolvedTicker && (
+                  <div className="ticker-badge">
+                    Analyzing: <span>{resolvedTicker}</span>
+                  </div>
+                )}
+
+                {/* Decision Card */}
+                {technical && (
+                  <div className={`decision-card ${signalClass}`}>
+                    <div className="decision-left">
+                      <div className="decision-label">AI Decision</div>
+                      <div className={`decision-signal ${signalClass}`}>{signal}</div>
+                      <div className="decision-sub">
+                        Based on {INDICATORS_USED.length} technical indicators &middot;{' '}
+                        {technical.timeframe_minutes}m timeframe
+                      </div>
+                    </div>
+                    <div className="decision-right">
+                      <div className="confidence-label">Confidence</div>
+                      <div className="confidence-value">{confidence}%</div>
+                      <div className="confidence-bar">
+                        <div
+                          className={`confidence-fill ${signalClass}`}
+                          style={{ width: `${Math.min(100, confidence)}%` }}
+                        />
+                      </div>
                     </div>
                   </div>
-                  <div style={{ height: 224 }}>
-                    <StockChart initialData={stockChart} ticker={resolvedTicker} period={chartPeriod} periodLabel={PERIOD_LABELS[chartPeriod] || chartPeriod} />
-                  </div>
-                  <p style={{ color: '#94a3b8', fontSize: 12, marginTop: 8 }}>Last {PERIOD_LABELS[chartPeriod] || chartPeriod} (close price)</p>
-                </div>
-              )}
-              <div className="glass-panel" style={{ padding: 24, borderRadius: 12, borderLeft: '4px solid #fbbf24' }}>
-                <h3 className="text-gold" style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', marginBottom: 8 }}>⚡ AI Insight</h3>
-                <p style={{ fontSize: '1.125rem', color: '#fff', fontWeight: 300, lineHeight: 1.6 }}>{`"${insight}"`}</p>
-              </div>
+                )}
 
-              {technical && (
-                <div className="glass-panel" style={{ padding: 24, borderRadius: 12, borderLeft: '4px solid #3b82f6' }}>
-                  <h3 style={{ color: '#93c5fd', fontSize: 12, fontWeight: 700, textTransform: 'uppercase', marginBottom: 8 }}>Technical Analysis (NeuralTrade)</h3>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 16 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span style={{ color: '#94a3b8', fontSize: 14 }}>Signal</span>
-                      <span style={{ fontWeight: 700, fontSize: '1.125rem', color: technical.signal === 'BUY' ? '#34d399' : technical.signal === 'SELL' ? '#f87171' : '#fbbf24' }}>
-                        {technical.signal === 'BUY' ? 'UP' : technical.signal === 'SELL' ? 'DOWN' : technical.signal}
-                      </span>
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span style={{ color: '#94a3b8', fontSize: 14 }}>Confidence</span>
-                      <span style={{ fontWeight: 700, color: '#fff' }}>{technical.confidence}%</span>
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span style={{ color: '#94a3b8', fontSize: 14 }}>Timeframe</span>
-                      <span style={{ color: '#fff' }}>{technical.timeframe_minutes}m</span>
-                    </div>
-                  </div>
-                  {technical.details && <p style={{ color: '#94a3b8', fontSize: 12, marginTop: 12 }}>Based on RSI, MACD, StochRSI & Bollinger Bands.</p>}
-                </div>
-              )}
-
-              {fundamentals && (
-                <div className="glass-panel" style={{ padding: 24, borderRadius: 12, borderLeft: '4px solid #10b981' }}>
-                  <h3 style={{ color: '#6ee7b7', fontSize: 12, fontWeight: 700, textTransform: 'uppercase', marginBottom: 8 }}>Fundamentals</h3>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 16, marginBottom: 12 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span style={{ color: '#94a3b8', fontSize: 14 }}>Trust Score</span>
-                      <span style={{ fontWeight: 700, fontSize: '1.125rem', color: '#fff' }}>{fundamentals.trust_score}/100</span>
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span style={{ color: '#94a3b8', fontSize: 14 }}>Verdict</span>
-                      <span
-                        style={{
-                          fontWeight: 700,
-                          color: (fundamentals.verdict && (fundamentals.verdict.includes('Strong') || fundamentals.verdict.includes('Legit'))) ? '#34d399' : (fundamentals.verdict && (fundamentals.verdict.includes('Risky') || fundamentals.verdict.includes('Suspicious'))) ? '#f87171' : '#fbbf24',
-                        }}
-                      >
+                {/* Stats Strip */}
+                <div className="stats-strip">
+                  {fundamentals && (
+                    <div className="stat-card">
+                      <div className="stat-label">Trust Score</div>
+                      <div className="stat-value">
+                        {fundamentals.trust_score}
+                        <span style={{ fontSize: 14, color: 'var(--text-muted)', fontWeight: 400 }}>/100</span>
+                      </div>
+                      <div className="stat-sub" style={{ color: verdictColor(fundamentals.verdict) }}>
                         {fundamentals.verdict}
-                      </span>
+                      </div>
+                    </div>
+                  )}
+                  {sentimentModule && (
+                    <div className="stat-card">
+                      <div className="stat-label">Sentiment</div>
+                      <div className="stat-value" style={{ color: sentimentColor(sentimentModule.verdict) }}>
+                        {sentimentModule.verdict}
+                      </div>
+                      <div className="stat-sub">Score: {sentimentModule.score}/100</div>
+                    </div>
+                  )}
+                  <div className="stat-card">
+                    <div className="stat-label">Market Velocity</div>
+                    <div className="stat-value" style={{ color: spike > 1.5 ? 'var(--sell)' : 'var(--buy)' }}>
+                      {spike}x
+                    </div>
+                    <div className="stat-sub">{spike > 1.5 ? 'High activity detected' : 'Normal activity'}</div>
+                  </div>
+                </div>
+
+                {/* Price Chart */}
+                {stockChart && (
+                  <div className="chart-section card">
+                    <div className="chart-header">
+                      <div className="chart-title">{company} &mdash; Price Chart</div>
+                      <div className="period-group" role="group" aria-label="Chart timeline">
+                        {['1d', '1mo', '3mo', '1y'].map((p) => (
+                          <button
+                            key={p}
+                            type="button"
+                            className={`period-btn${chartPeriod === p ? ' active' : ''}`}
+                            onClick={() => setChartPeriod(p)}
+                          >
+                            {PERIOD_SHORT[p]}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="chart-body">
+                      <StockChart
+                        initialData={stockChart}
+                        ticker={resolvedTicker}
+                        period={chartPeriod}
+                        periodLabel={PERIOD_LABELS[chartPeriod] || chartPeriod}
+                      />
+                    </div>
+                    <div className="chart-footer">
+                      Showing {PERIOD_LABELS[chartPeriod] || chartPeriod} closing prices
                     </div>
                   </div>
-                  {fundamentals.metrics && Object.keys(fundamentals.metrics).length > 0 && (
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 8, fontSize: 14 }}>
-                      {Object.entries(fundamentals.metrics).map(([label, value]) => (
-                        <div key={label} style={{ display: 'flex', justifyContent: 'space-between', background: 'rgba(30, 41, 59, 0.4)', borderRadius: 4, padding: '8px 12px' }}>
-                          <span style={{ color: '#94a3b8' }}>{label}</span>
-                          <span style={{ color: '#fff', fontFamily: 'monospace' }}>{value != null ? (typeof value === 'number' ? value.toFixed(2) : String(value)) + (label.indexOf('%') >= 0 && typeof value === 'number' ? '%' : '') : '—'}</span>
+                )}
+
+                {/* Technical Indicators */}
+                {technical && (
+                  <>
+                    <div className="section-header">Technical Indicators</div>
+                    <div className="indicators-grid">
+                      {INDICATORS_USED.map((name) => (
+                        <div key={name} className="indicator-card">
+                          <div className="indicator-name">{name}</div>
+                          <div className="indicator-status" style={{ color: signalColor(signal) }}>
+                            <span className="indicator-dot" style={{ background: signalColor(signal) }} />
+                            {signal === 'BUY' ? 'Bullish' : signal === 'SELL' ? 'Bearish' : 'Neutral'}
+                          </div>
                         </div>
                       ))}
                     </div>
-                  )}
-                </div>
-              )}
+                  </>
+                )}
 
-              {sentimentModule && (
-                <div className="glass-panel" style={{ padding: 24, borderRadius: 12, borderLeft: '4px solid #f59e0b' }}>
-                  <h3 style={{ color: '#fcd34d', fontSize: 12, fontWeight: 700, textTransform: 'uppercase', marginBottom: 8 }}>Sentiment Analysis (NeuralTrade)</h3>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 16 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span style={{ color: '#94a3b8', fontSize: 14 }}>Verdict</span>
-                      <span style={{ fontWeight: 700, fontSize: '1.125rem', color: sentimentModule.verdict === 'Positive' ? '#34d399' : sentimentModule.verdict === 'Negative' ? '#f87171' : '#fbbf24' }}>{sentimentModule.verdict}</span>
+                {/* Fundamental Metrics */}
+                {fundamentals?.metrics && Object.keys(fundamentals.metrics).length > 0 && (
+                  <>
+                    <div className="section-header">Fundamental Metrics</div>
+                    <div className="metrics-grid">
+                      {Object.entries(fundamentals.metrics).map(([label, value]) => (
+                        <div key={label} className="metric-item">
+                          <span className="metric-label">{label}</span>
+                          <span className="metric-value">{formatMetric(label, value)}</span>
+                        </div>
+                      ))}
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span style={{ color: '#94a3b8', fontSize: 14 }}>Score</span>
-                      <span style={{ fontWeight: 700, color: '#fff' }}>{sentimentModule.score}/100</span>
+                  </>
+                )}
+
+                {/* AI Analysis */}
+                {insight && (
+                  <>
+                    <div className="section-header">AI Analysis</div>
+                    <div className="ai-analysis card">
+                      <TypingEffect
+                        text={`“${insight}”`}
+                        start={analysisState === ANALYSIS_STATES.analyzing || analysisState === ANALYSIS_STATES.complete}
+                        minDelayMs={12}
+                        maxDelayMs={28}
+                        initialDelayMs={250}
+                        onDone={() => {
+                          setAnalysisState(ANALYSIS_STATES.complete)
+                        }}
+                      />
                     </div>
+                  </>
+                )}
+
+                {/* Sentiment Charts */}
+                {hasSentimentData && (
+                  <>
+                    <div className="section-header">Sentiment Trends</div>
+                    <div className="charts-grid">
+                      <div className="mini-chart-card">
+                        <div className="mini-chart-title">Sentiment Trend</div>
+                        <div className="mini-chart-body">
+                          <SentimentCharts sentiment={sentiment} volume={volume} type="sentiment" />
+                        </div>
+                      </div>
+                      <div className="mini-chart-card">
+                        <div className="mini-chart-title">Volume Pressure</div>
+                        <div className="mini-chart-body">
+                          <SentimentCharts sentiment={sentiment} volume={volume} type="volume" />
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* ── News ── */}
+          <section className="news-section">
+            <div className="section-header">Market News</div>
+            <p className="news-header-text">
+              {wireLabel ? (
+                <>
+                  Latest news for <span>{wireLabel}</span>
+                </>
+              ) : (
+                'Latest market news'
+              )}
+            </p>
+            <div className="news-grid">
+              {visibleNews.map((article, i) => (
+                <a
+                  key={i}
+                  href={article.url || '#'}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="news-card"
+                  style={{
+                    cursor: article.url ? 'pointer' : 'default',
+                    opacity: article.url ? 1 : 0.7,
+                  }}
+                >
+                  <div className="news-meta">
+                    <span className="news-source">{article.source}</span>
+                    <span>{article.timestamp}</span>
                   </div>
-                  <p style={{ color: '#94a3b8', fontSize: 12, marginTop: 12 }}>News-based sentiment (VADER + financial lexicon). Trend chart below uses same logic.</p>
-                </div>
-              )}
-
-              <h3 style={{ color: '#fff', fontWeight: 700, fontSize: 14, marginTop: 8, borderLeft: '4px solid #f59e0b', paddingLeft: 12 }}>Sentiment trend from news (NeuralTrade Sentiment Module)</h3>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
-                <div className="glass-panel" style={{ padding: 16, borderRadius: 12 }}>
-                  <h3 style={{ color: '#94a3b8', fontSize: 12, textTransform: 'uppercase', fontWeight: 700, marginBottom: 8 }}>Sentiment Trend</h3>
-                  <div style={{ height: 160 }}><SentimentCharts sentiment={sentiment} volume={volume} type="sentiment" /></div>
-                </div>
-                <div className="glass-panel" style={{ padding: 16, borderRadius: 12 }}>
-                  <h3 style={{ color: '#94a3b8', fontSize: 12, textTransform: 'uppercase', fontWeight: 700, marginBottom: 8 }}>Volume Pressure</h3>
-                  <div style={{ height: 160 }}><SentimentCharts sentiment={sentiment} volume={volume} type="volume" /></div>
-                </div>
-              </div>
-
-              <div className="glass-panel" style={{ padding: 16, borderRadius: 12, textAlign: 'center', display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingLeft: 48, paddingRight: 48 }}>
-                <span style={{ color: '#94a3b8', fontSize: 14, textTransform: 'uppercase', fontWeight: 700 }}>Market Velocity</span>
-                <span style={{ fontSize: '2.25rem', fontWeight: 700, color: spike > 1.5 ? '#f87171' : '#34d399' }}>{spike}x</span>
-              </div>
-            </>
-          )}
-
-          {!company && (
-            <div className="glass-panel" style={{ padding: 48, borderRadius: 12, textAlign: 'center', opacity: 0.5, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: 256 }}>
-              <div style={{ fontSize: '3rem', marginBottom: 16 }}>📡</div>
-              <h2 style={{ fontSize: '1.25rem', fontWeight: 700, color: '#fff' }}>System Ready</h2>
-              <p style={{ color: '#94a3b8' }}>Enter a symbol above to activate the signal engine.</p>
+                  <p className="news-text">{article.text}</p>
+                </a>
+              ))}
             </div>
-          )}
-
-          <h3 style={{ color: '#fff', fontWeight: 700, fontSize: '1.125rem', marginTop: 8, borderLeft: '4px solid #3b82f6', paddingLeft: 12 }}>Live Market Wire</h3>
-          <p style={{ color: '#94a3b8', fontSize: 14, marginTop: 4, marginBottom: 8 }}>
-            {wireLabel ? <>6 latest news for <span className="text-gold">{wireLabel}</span></> : 'Latest market news (default)'}
-          </p>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, paddingBottom: 32 }}>
-            {(displayNews || []).map((article, i) => (
-              <a
-                key={i}
-                href={article.url || '#'}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="glass-panel"
-                style={{ padding: 16, borderRadius: 8, display: 'block', cursor: article.url ? 'pointer' : 'default', opacity: article.url ? 1 : 0.7, textDecoration: 'none', color: 'inherit' }}
+            {hasMoreNews && (
+              <button
+                className="view-more-btn"
+                onClick={() => setNewsExpanded((prev) => !prev)}
               >
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#fbbf24', marginBottom: 8 }}>
-                  <span>{article.source}</span>
-                  <span>{article.timestamp}</span>
-                </div>
-                <p style={{ fontSize: 14, color: '#e2e8f0', fontWeight: 500, lineHeight: 1.4 }}>{article.text}</p>
-              </a>
-            ))}
-          </div>
-        </div>
+                {newsExpanded ? 'Show Less' : 'View More'}
+                <ChevronIcon className={`view-more-chevron${newsExpanded ? ' expanded' : ''}`} />
+              </button>
+            )}
+          </section>
 
-        <aside style={{ flex: '0 0 25%', display: 'flex', flexDirection: 'column', gap: 24, minHeight: 0 }}>
-          <div className="glass-panel" style={{ padding: 20, borderRadius: 12, flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-            <h3 style={{ fontSize: 14, fontWeight: 700, color: '#fbbf24', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 16, borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: 8, flexShrink: 0 }}>⚡ Top Movers</h3>
-            <div style={{ overflowY: 'auto', flex: 1, paddingRight: 4 }} className="scrollbar-hide">
-              {(movers || []).map((stock) => (
-                <div key={stock.symbol} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: 8, borderRadius: 4, background: 'rgba(30, 41, 59, 0.4)', marginBottom: 12 }}>
-                  <div style={{ fontWeight: 700, fontSize: 14, color: '#fff' }}>{stock.symbol}</div>
-                  <div style={{ textAlign: 'right' }}>
-                    <div style={{ fontFamily: 'monospace', fontSize: 12, color: '#cbd5e1' }}>{stock.price}</div>
-                    <div style={{ fontSize: 10, fontWeight: 700, color: stock.color === 'text-emerald-400' ? '#34d399' : '#f87171' }}>{stock.pct_str}</div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-          <div className="glass-panel scrollbar-hide" style={{ padding: 16, borderRadius: 12, height: '50%', overflowY: 'auto' }}>
-            <h3 style={{ fontSize: 12, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 16, textAlign: 'center', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: 8 }}>Indices</h3>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {(market || []).map((item) => (
-                <div key={item.name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(15, 23, 42, 0.3)', padding: 8, borderRadius: 4 }}>
-                  <span style={{ fontSize: 12, fontWeight: 700, color: '#cbd5e1' }}>{item.name}</span>
-                  <div style={{ textAlign: 'right' }}>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: '#fff' }}>{item.price}</div>
-                    <div style={{ fontSize: 9, color: item.color === 'text-emerald-400' ? '#34d399' : '#f87171' }}>{item.change}</div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </aside>
-      </div>
+          {/* ── Footer ── */}
+          <footer className="footer">NeuralTrade &copy; 2025</footer>
+        </div>
+      </main>
+
+      {/* ── About Modal ── */}
+      {showAbout && <AboutModal onClose={() => setShowAbout(false)} />}
     </div>
   )
 }

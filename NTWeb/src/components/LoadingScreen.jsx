@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react'
 
 const MESSAGES = [
-  'Loading Analysis Modules...',
-  'Preparing AI Systems...',
-  'Thank you for your cooperation.',
+  'Initializing AI models...',
+  'Loading analysis modules...',
+  'Connecting to market data...',
 ]
 
 export default function LoadingScreen() {
@@ -18,7 +18,6 @@ export default function LoadingScreen() {
 
   return (
     <div
-      className="loading-screen"
       style={{
         position: 'fixed',
         inset: 0,
@@ -26,38 +25,36 @@ export default function LoadingScreen() {
         flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
-        background: 'radial-gradient(circle at top left, hsl(294, 98%, 17%), #031e5f)',
-        color: '#e2e8f0',
+        background: '#080c15',
+        color: '#e6edf3',
+        fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
         zIndex: 9999,
       }}
     >
       <div
         style={{
-          width: 48,
-          height: 48,
-          border: '3px solid rgba(251, 191, 36, 0.3)',
-          borderTopColor: '#fbbf24',
+          width: 40,
+          height: 40,
+          border: '3px solid rgba(47, 129, 247, 0.15)',
+          borderTopColor: '#2f81f7',
           borderRadius: '50%',
-          animation: 'spin 0.9s linear infinite',
+          animation: 'spin 0.8s linear infinite',
           marginBottom: 24,
         }}
       />
       <p
         style={{
-          fontSize: '1.125rem',
+          fontSize: 14,
           fontWeight: 500,
+          color: '#8b949e',
           margin: 0,
-          minHeight: 28,
+          minHeight: 24,
           transition: 'opacity 0.3s ease',
         }}
       >
         {MESSAGES[messageIndex]}
       </p>
-      <style>{`
-        @keyframes spin {
-          to { transform: rotate(360deg); }
-        }
-      `}</style>
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   )
 }

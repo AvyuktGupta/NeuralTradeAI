@@ -26,7 +26,9 @@ function StockChart({ initialData, ticker, period, periodLabel }) {
         }
       })
       .catch(() => {})
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+    }
   }, [ticker, period])
 
   useEffect(() => {
@@ -36,9 +38,9 @@ function StockChart({ initialData, ticker, period, periodLabel }) {
     const ctx = el.getContext('2d')
     if (chartRef.current) chartRef.current.destroy()
 
-    const gradient = ctx.createLinearGradient(0, 0, 0, 250)
-    gradient.addColorStop(0, 'rgba(34, 211, 238, 0.25)')
-    gradient.addColorStop(1, 'rgba(34, 211, 238, 0)')
+    const gradient = ctx.createLinearGradient(0, 0, 0, 300)
+    gradient.addColorStop(0, 'rgba(47, 129, 247, 0.18)')
+    gradient.addColorStop(1, 'rgba(47, 129, 247, 0)')
 
     chartRef.current = new Chart(ctx, {
       type: 'line',
@@ -48,29 +50,53 @@ function StockChart({ initialData, ticker, period, periodLabel }) {
           {
             label: 'Close',
             data: prices,
-            borderColor: '#22d3ee',
+            borderColor: '#2f81f7',
             backgroundColor: gradient,
+            borderWidth: 1.5,
             fill: true,
             tension: 0.3,
             pointRadius: 0,
             pointHoverRadius: 4,
+            pointHoverBackgroundColor: '#2f81f7',
+            pointHoverBorderColor: '#fff',
+            pointHoverBorderWidth: 2,
           },
         ],
       },
       options: {
         maintainAspectRatio: false,
-        plugins: { legend: { display: false } },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: '#161b22',
+            borderColor: 'rgba(48, 54, 61, 0.8)',
+            borderWidth: 1,
+            titleColor: '#8b949e',
+            bodyColor: '#e6edf3',
+            titleFont: { family: 'Inter', size: 11 },
+            bodyFont: { family: 'Inter', size: 13, weight: 600 },
+            padding: 10,
+            cornerRadius: 6,
+            displayColors: false,
+          },
+        },
         scales: {
           x: {
             display: true,
-            ticks: { color: '#94a3b8', maxTicksLimit: 8 },
-            grid: { color: 'rgba(255,255,255,0.06)' },
+            ticks: { color: '#6e7681', font: { family: 'Inter', size: 10 }, maxTicksLimit: 8 },
+            grid: { color: 'rgba(48, 54, 61, 0.3)' },
+            border: { color: 'rgba(48, 54, 61, 0.3)' },
           },
           y: {
             display: true,
-            ticks: { color: '#94a3b8' },
-            grid: { color: 'rgba(255,255,255,0.06)' },
+            ticks: { color: '#6e7681', font: { family: 'Inter', size: 10 } },
+            grid: { color: 'rgba(48, 54, 61, 0.3)' },
+            border: { color: 'transparent' },
           },
+        },
+        interaction: {
+          intersect: false,
+          mode: 'index',
         },
       },
     })
@@ -83,7 +109,13 @@ function StockChart({ initialData, ticker, period, periodLabel }) {
     }
   }, [labels, prices])
 
-  return <canvas ref={canvasRef} style={{ width: '100%', height: '100%' }} aria-label={`Stock chart ${periodLabel}`} />
+  return (
+    <canvas
+      ref={canvasRef}
+      style={{ width: '100%', height: '100%' }}
+      aria-label={`Stock chart ${periodLabel}`}
+    />
+  )
 }
 
 export default memo(StockChart)

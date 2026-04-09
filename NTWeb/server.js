@@ -12,7 +12,7 @@ const BACKEND_URL = (process.env.BACKEND_URL || 'http://127.0.0.1:5001').replace
 
 app.use(express.json());
 
-/** Proxy /api/* to Python backend (e.g. /api/status -> /status, /api/market -> /market) */
+/** Proxy /api/* to Python backend (e.g. /api/status -> /status, /api/scan -> /scan) */
 app.use('/api', async (req, res, next) => {
   const backendPath = req.url || '/';
   const url = `${BACKEND_URL}${backendPath}`;
